@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Saturday Scheduler</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Bootstrap -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+
+  <!-- FullCalendar -->
+  <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.11/index.global.min.js"></script>
+
+  <style>
+    body { background: #f8f9fa; }
+    .container { margin-top: 30px; }
+    .nav-tabs .nav-link.active { background-color: #0d6efd; color: white; }
+    #calendar { max-width: 1000px; margin: 20px auto; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    table { background: white; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.1); }
+    .card { box-shadow: 0 2px 6px rgba(0,0,0,0.1); border-radius: 10px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h2 class="text-center mb-4">📅 Saturday Scheduler</h2>
+
+  <!-- Tabs -->
+  <ul class="nav nav-tabs" id="schedulerTabs" role="tablist">
+    <li class="nav-item">
+      <button class="nav-link active" id="manage-tab" data-bs-toggle="tab" data-bs-target="#manage" type="button" role="tab">Manage</button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" id="calendar-tab" data-bs-toggle="tab" data-bs-target="#calendarView" type="button" role="tab">Calendar</button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" id="table-tab" data-bs-toggle="tab" data-bs-target="#tableView" type="button" role="tab">Table</button>
+    </li>
+    <li class="nav-item">
+      <button class="nav-link" id="holidays-tab" data-bs-toggle="tab" data-bs-target="#holidaysView" type="button" role="tab">Holidays</button>
+    </li>
+  </ul>
+
+  <div class="tab-content mt-3">
+
+    <!-- Manage -->
+    <div class="tab-pane fade show active" id="manage" role="tabpanel">
+      <!-- Generate FIRST -->
+      <div class="card p-3">
+        <h5>Generate Saturday Schedule (Coming Saturday → Last Saturday of Year)</h5>
+        <p class="text-muted mb-2">Skips holidays and preserves swaps. Applies department-specific rules.</p>
+        <form id="genForm" class="row g-2 align-items-center">
+          <div class="col-sm-3">
+            <input type="number" class="form-control" id="genYear" placeholder="Year (optional)">
+          </div>
+          <div class="col-sm-3">
+            <button class="btn btn-warning" type="submit">Generate</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="row">
+        <!-- Departments -->
+        <div class="col-md-6">
+          <div class="card p-3">
+            <h5>Add Department</h5>
+            <form id="deptForm">
+              <div class="input-group mb-3">
+                <input type="text" class="form-control" placeholder="Department Name" id="deptName" required>
+                <button class="btn btn-primary" type="submit">Add</button>
+              </div>
+            </form>
+            <h6>Existing Departments</h6>
+            <ul class="list-group" id="deptList"></ul>
+          </div>
+        </div>
+
+        <!-- Employees -->
+        <div class="col-md-6">
+          <div class="card p-3">
+            <h5>Add Employee</h5>
+            <form id="empForm">
+              <div class="row g-2 mb-3">
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" placeholder="Employee Name" id="empName" required>
+                </div>
+                <div class="col-sm-4">
+                  <input type="number" class="form-control" placeholder="Department ID" id="empDept" required>
+                </div>
+                <div class="col-sm-3">
+                  <input type="number" class="form-control" placeholder="Group (1-4, Spec Ops)" id="empGroup">
+                </div>
+              </div>
+              <button class="btn btn-success" type="submit">Add</button>
+            </form>
+            <h6 class="mt-3">Existing Employees</h6>
+            <ul class="list-group" id="empList"></ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Calendar -->
+    <div class="tab-pane fade" id="calendarView" role="tabpanel">
+      <div id="calendar"></div>
+    </div>
+
+    <!-- Table -->
+    <div class="tab-pane fade" id="tableView" role="tabpanel">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h5>Schedules</h5>
+        <div class="d-flex gap-2">
+          <button class="btn btn-sm btn-outline-secondary" onclick="exportExcel()">⬇️ Export Excel</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteAllSchedules()">❌ Clear All</button>
+        </div>
+      </div>
+      <table class="table table-striped" id="scheduleTable">
+        <thead class="table-dark">
+          <tr>
+            <th>Date</th>
+            <th>Department</th>
+            <th>Employee</th>
+            <th>Override</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Holidays -->
+    <div class="tab-pane fade" id="holidaysView" role="tabpanel">
+      <div class="card p-3">
+        <h5>Mark Non-Working Saturday</h5>
+        <form id="holidayForm">
+          <div class="row g-2">
+            <div class="col-md-4">
+              <input type="date" class="form-control" id="holidayDate" required>
+            </div>
+            <div class="col-md-6">
+              <input type="text" class="form-control" id="holidayNote" placeholder="Note (optional)">
+            </div>
+            <div class="col-md-2 d-grid">
+              <button class="btn btn-danger" type="submit">Save</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <div class="card p-3">
+        <h6>Existing Holidays</h6>
+        <ul class="list-group" id="holidayList"></ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_BASE = location.origin;
+
+// ----- Generate -----
+document.getElementById("genForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const yearVal = document.getElementById("genYear").value;
+  const body = yearVal ? { year: parseInt(yearVal) } : {};
+  const r = await fetch(`${API_BASE}/schedule/generate`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  });
+  const j = await r.json();
+  alert(j.message || "Schedule generated!");
+});
+
+// ----- Departments -----
+async function loadDepartments() {
+  const res = await fetch(`${API_BASE}/departments`);
+  const data = await res.json();
+  document.getElementById("deptList").innerHTML =
+    data.map(d => `<li class="list-group-item">${d.id} — ${d.name}</li>`).join("");
+}
+document.getElementById("deptForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  await fetch(`${API_BASE}/departments`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({name: document.getElementById("deptName").value})
+  });
+  e.target.reset();
+  loadDepartments();
+});
+
+// ----- Employees -----
+async function loadEmployees() {
+  const res = await fetch(`${API_BASE}/employees`);
+  const data = await res.json();
+  document.getElementById("empList").innerHTML =
+    data.map(e => `<li class="list-group-item">
+      ${e.id} — ${e.name} (Dept ${e.department_id}${e.group_num ? `, Group ${e.group_num}` : ""})
+    </li>`).join("");
+}
+document.getElementById("empForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  await fetch(`${API_BASE}/employees`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({
+      name: document.getElementById("empName").value,
+      department_id: parseInt(document.getElementById("empDept").value),
+      group_num: document.getElementById("empGroup").value
+    })
+  });
+  e.target.reset();
+  loadEmployees();
+});
+
+// ----- Holidays -----
+async function loadHolidays() {
+  const res = await fetch(`${API_BASE}/holidays`);
+  const data = await res.json();
+  document.getElementById("holidayList").innerHTML =
+    data.map(h => `<li class="list-group-item d-flex justify-content-between">
+      <span><strong>${h.date}</strong> ${h.note ? "— " + h.note : ""}</span>
+      <span class="badge bg-danger">Holiday</span>
+    </li>`).join("");
+}
+document.getElementById("holidayForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const holidayDate = document.getElementById("holidayDate").value;
+  const holidayNote = document.getElementById("holidayNote").value;
+  const r = await fetch(`${API_BASE}/holidays`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({date: holidayDate, note: holidayNote})
+  });
+  if (r.ok) {
+    e.target.reset();
+    loadHolidays();
+  } else {
+    const j = await r.json();
+    alert(j.error || "Error saving holiday");
+  }
+});
+
+// ----- Schedule (calendar + table + delete + export) -----
+async function deleteAllSchedules() {
+  if (!confirm("Delete ALL schedules?")) return;
+  await fetch(`${API_BASE}/schedule`, {
+    method: "DELETE",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({all: true})
+  });
+  loadSchedule();
+}
+async function deleteScheduleByDate(dateStr) {
+  if (!confirm(`Delete schedules on ${dateStr}?`)) return;
+  await fetch(`${API_BASE}/schedule`, {
+    method: "DELETE",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({date: dateStr})
+  });
+  loadSchedule();
+}
+async function exportExcel() {
+  const res = await fetch(`${API_BASE}/schedule/export`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'Saturday_Schedule.xlsx';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+async function loadSchedule() {
+  const res = await fetch(`${API_BASE}/schedule`);
+  const data = await res.json();
+
+  // Calendar
+  const calendarEl = document.getElementById('calendar');
+  calendarEl.innerHTML = "";
+  const calendar = new FullCalendar.Calendar(calendarEl, {
+    initialView: 'dayGridMonth',
+    events: data.map(s => ({
+      title: `${s.department} — ${s.employee}`,
+      start: s.date,
+      color: s.override ? "orange" : "#0d6efd"
+    }))
+  });
+  calendar.render();
+
+  // Table
+  const tbody = document.querySelector("#scheduleTable tbody");
+  tbody.innerHTML = data.map(s => `
+    <tr>
+      <td>${s.date}</td>
+      <td>${s.department}</td>
+      <td>${s.employee}</td>
+      <td>${s.override ? "✔️" : ""}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteScheduleByDate('${s.date}')">❌</button></td>
+    </tr>`).join("");
+}
+
+// ----- Init -----
+document.addEventListener("DOMContentLoaded", () => {
+  loadDepartments();
+  loadEmployees();
+  loadHolidays();
+});
+document.getElementById("calendar-tab").addEventListener("click", loadSchedule);
+document.getElementById("table-tab").addEventListener("click", loadSchedule);
+document.getElementById("holidays-tab").addEventListener("click", loadHolidays);
+</script>
+</body>
+</html>
