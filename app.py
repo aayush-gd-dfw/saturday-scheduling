@@ -284,29 +284,29 @@ def get_schedule():
         })
     return jsonify(result)
 
-@app.route("/schedule/swap", methods=["POST"])
-def swap_shifts():
-    b = request.get_json(force=True)
-    dept_id = int(b["dept_id"])
-    date_a = date.fromisoformat(b["date_a"])
-    date_b = date.fromisoformat(b["date_b"])
-    emp_a_id = int(b["emp_a_id"])
-    emp_b_id = int(b["emp_b_id"])
+from flask import request, jsonify
 
-    # Holiday guard
-    for dt in (date_a, date_b):
-        if Holiday.query.get(dt):
-            return jsonify({"error": f"{dt.isoformat()} is a holiday; cannot assign."}), 400
+@app.route("/swap", methods=["POST"])
+def swap_shift():
+    data = request.get_json()
+    emp1 = data.get("employee1")
+    emp2 = data.get("employee2")
+    orig_date = data.get("original_date")
+    new_date = data.get("new_date")
 
-    sched_a = Schedule.query.filter_by(date=date_a, department_id=dept_id).first()
-    sched_b = Schedule.query.filter_by(date=date_b, department_id=dept_id).first()
-    if not sched_a or not sched_b:
-        return jsonify({"error": "Both schedules must exist"}), 400
+    # Find schedules in DB (SQLAlchemy or JSON storage)
+    s1 = Schedule.query.filter_by(employee=emp1, date=orig_date).first()
+    s2 = Schedule.query.filter_by(employee=emp2, date=new_date).first()
 
-    sched_a.employee_id, sched_b.employee_id = emp_b_id, emp_a_id
-    sched_a.override, sched_b.override = True, True
+    if not s1 or not s2:
+        return jsonify({"success": False, "message": "Could not find matching shifts"}), 400
+
+    # Swap employees
+    s1.employee, s2.employee = s2.employee, s1.employee
     db.session.commit()
-    return jsonify({"message": "Shifts swapped successfully"})
+
+    return jsonify({"success": True, "message": "Shifts swapped successfully!"})
+
 
 @app.route("/schedule", methods=["DELETE"])
 def delete_schedule():
