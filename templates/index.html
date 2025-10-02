@@ -59,7 +59,21 @@
           </div>
         </form>
       </div>
-
+      <!-- 📂 Import CSV -->
+    <div class="card p-3 mb-3">
+    <h5>Import Existing Schedule</h5>
+    <form action="/schedule/import" method="POST" enctype="multipart/form-data">
+        <div class="row g-2">
+        <div class="col-sm-8">
+            <input type="file" name="file" accept=".csv" class="form-control" required>
+        </div>
+        <div class="col-sm-4">
+            <button class="btn btn-primary w-100" type="submit">Upload CSV</button>
+        </div>
+        </div>
+    </form>
+    <small class="text-muted">Format: date,department,employee</small>
+    </div>
       <div class="row">
         <!-- Departments -->
         <div class="col-md-6">

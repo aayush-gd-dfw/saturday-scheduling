@@ -340,6 +340,70 @@ def generate_schedule():
     db.session.commit()
     return jsonify({"message": f"Generated schedule from {start} to {end}."})
 
+import csv
+from werkzeug.utils import secure_filename
+
+@app.route("/schedule/import", methods=["POST"])
+def import_schedule():
+    """
+    Import schedule from uploaded CSV file.
+    CSV format: date,department,employee
+    """
+
+    if "file" not in request.files:
+        return jsonify({"error": "CSV file is required"}), 400
+
+    file = request.files["file"]
+    filename = secure_filename(file.filename)
+
+    if not filename.lower().endswith(".csv"):
+        return jsonify({"error": "File must be a .csv"}), 400
+
+    reader = csv.DictReader(file.stream.read().decode("utf-8").splitlines())
+    imported, skipped = 0, []
+
+    for row in reader:
+        try:
+            d = date.fromisoformat(row["date"].strip())
+            dept_name = row["department"].strip()
+            emp_name = row["employee"].strip()
+
+            dept = Department.query.filter(Department.name.ilike(dept_name)).first()
+            if not dept:
+                skipped.append(f"Dept not found: {dept_name} ({d})")
+                continue
+
+            emp = Employee.query.filter(
+                Employee.department_id == dept.id,
+                db.func.lower(Employee.name) == emp_name.lower()
+            ).first()
+            if not emp:
+                skipped.append(f"Emp not found: {emp_name} ({d}, {dept_name})")
+                continue
+
+            # Remove any non-override existing schedule
+            existing = Schedule.query.filter_by(date=d, department_id=dept.id).all()
+            for e in existing:
+                if not e.override:
+                    db.session.delete(e)
+
+            # Insert new row
+            db.session.add(Schedule(
+                date=d,
+                department_id=dept.id,
+                employee_id=emp.id,
+                override=False
+            ))
+            imported += 1
+
+        except Exception as e:
+            skipped.append(f"Error row {row}: {str(e)}")
+
+    db.session.commit()
+    return jsonify({
+        "message": f"Imported {imported} rows",
+        "skipped": skipped
+    })
 
 
 # ---------- Schedule read / swap / delete ----------
