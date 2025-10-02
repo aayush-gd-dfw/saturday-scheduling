@@ -115,52 +115,30 @@ def add_employee_by_name():
 @app.route("/employees/remove_by_name", methods=["POST"])
 def remove_employee_by_name():
     """
-    Remove an employee by name + department.
-    Preserves swapped (override=True) schedules.
-    Example body:
-    {
-      "name": "Jane Doe",
-      "department_name": "CSR"
-    }
+    Remove employee by name (case-insensitive).
+    Body: { "name": "Aayush" }
     """
-    body = request.get_json(force=True)
-    emp_name = body.get("name", "").strip()
-    dept_name = body.get("department_name", "").strip()
+    body = request.get_json(force=True) or {}
+    name = body.get("name", "").strip()
 
-    if not emp_name or not dept_name:
-        return jsonify({"error": "name and department_name are required"}), 400
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
 
-    # Find department
-    dept = Department.query.filter(Department.name.ilike(dept_name)).first()
-    if not dept:
-        return jsonify({"error": f"Department {dept_name} not found"}), 404
-
-    # Find employee in that department
+    # find employee
     emp = Employee.query.filter(
-        Employee.name.ilike(emp_name),
-        Employee.department_id == dept.id
+        db.func.lower(Employee.name) == name.lower()
     ).first()
 
     if not emp:
-        return jsonify({"error": f"Employee {emp_name} not found in {dept_name}"}), 404
+        return jsonify({"error": f"No employee found with name {name}"}), 404
 
-    today = date.today()
-
-    # Delete only future non-overridden schedules for this employee
-    Schedule.query.filter(
-        Schedule.employee_id == emp.id,
-        Schedule.date >= today,
-        Schedule.override == False
-    ).delete()
-
-    # Delete employee
+    # delete employee + related schedules
+    Schedule.query.filter_by(employee_id=emp.id).delete()
     db.session.delete(emp)
     db.session.commit()
 
-    return jsonify({
-        "message": f"Employee {emp.name} removed from {dept.name}. "
-                   f"Swapped (override) shifts were preserved."
-    }), 200
+    return jsonify({"message": f"Removed {name} successfully"})
+
 
 
 @app.route("/employees", methods=["GET"])
