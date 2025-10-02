@@ -83,26 +83,35 @@ def list_departments():
     return jsonify([{"id": d.id, "name": d.name} for d in depts])
 
 # ---------- Employees ----------
-@app.route("/employees", methods=["POST"])
-def add_employee():
+@app.route("/employees/add_by_name", methods=["POST"])
+def add_employee_by_name():
     body = request.get_json(force=True)
-    name = body["name"].strip()
-    dept_id = int(body["department_id"])
+    name = body.get("name", "").strip()
+    dept_name = body.get("department_name", "").strip()
     group_num = body.get("group_num")
-    if group_num is not None and str(group_num).strip() != "":
-        group_num = int(group_num)
-        if group_num < 1 or group_num > 4:
+
+    if not name or not dept_name:
+        return jsonify({"error": "name and department_name are required"}), 400
+
+    dept = Department.query.filter(Department.name.ilike(dept_name)).first()
+    if not dept:
+        return jsonify({"error": f"Department '{dept_name}' not found"}), 404
+
+    if dept.name == "Spec Ops":
+        group_num = int(group_num) if group_num else None
+        if group_num and group_num not in (1,2,3,4):
             return jsonify({"error": "group_num must be 1..4 for Spec Ops"}), 400
     else:
         group_num = None
 
-    if not Department.query.get(dept_id):
-        return jsonify({"error": "Department not found"}), 404
-
-    emp = Employee(name=name, department_id=dept_id, group_num=group_num)
+    emp = Employee(name=name, department_id=dept.id, group_num=group_num)
     db.session.add(emp)
     db.session.commit()
-    return jsonify({"id": emp.id, "name": emp.name, "department_id": emp.department_id, "group_num": emp.group_num})
+    return jsonify({
+        "id": emp.id, "name": emp.name,
+        "department": dept.name, "group_num": emp.group_num
+    }), 201
+
 
 @app.route("/employees", methods=["GET"])
 def list_employees():
