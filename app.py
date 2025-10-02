@@ -116,11 +116,11 @@ def add_employee_by_name():
 def remove_employee_by_name():
     """
     Remove employee by name (case-insensitive).
-    Body: { "name": "Aayush" }
+    Accepts JSON or form: { "name": "Aayush" } OR name=Aayush
     """
-    body = request.get_json(force=True) or {}
-    name = body.get("name", "").strip()
+    data = request.get_json(silent=True) or request.form.to_dict() or {}
 
+    name = data.get("name", "").strip()
     if not name:
         return jsonify({"error": "Name is required"}), 400
 
@@ -138,6 +138,7 @@ def remove_employee_by_name():
     db.session.commit()
 
     return jsonify({"message": f"Removed {name} successfully"})
+
 
 
 
