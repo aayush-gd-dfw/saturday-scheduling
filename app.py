@@ -322,7 +322,7 @@ def generate_schedule():
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=corey_emp.id, override=False))
                     used_ids.add(corey_emp.id)
                 q = rot[DEPT_CAR]
-                needed = 2  # 2 others besides Corey
+                needed = 1  # 2 others besides Corey
                 while needed > 0 and q:
                     cand = next_from_deque(q)
                     if cand and cand.id not in used_ids:
