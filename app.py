@@ -284,46 +284,72 @@ def get_schedule():
         })
     return jsonify(result)
 
-from flask import request, jsonify
+from flask import Flask, request, jsonify
+from models import db, Schedule
+from dateutil import parser
+import difflib
 
-from flask import request, jsonify
-from datetime import datetime
-from models import Schedule, db
+app = Flask(__name__)
 
 @app.route("/swap", methods=["POST"])
 def swap_shift():
+    """
+    Swap shifts between two employees on given dates.
+    Expects JSON payload:
+    {
+        "employee1": "Houston",
+        "employee2": "Daniel",
+        "original_date": "10-11-2025",
+        "new_date": "10-25-2025"
+    }
+    """
+
+    data = request.get_json() or request.form.to_dict()
+
+    emp1 = data.get("employee1", "").strip()
+    emp2 = data.get("employee2", "").strip()
+    orig_date = data.get("original_date", "").strip()
+    new_date = data.get("new_date", "").strip()
+
+    if not emp1 or not emp2 or not orig_date or not new_date:
+        return jsonify({"success": False, "message": "Missing required fields"}), 400
+
+    # ✅ Parse flexible date formats
     try:
-        data = request.get_json(force=True)
-        emp1 = data.get("employee1")
-        emp2 = data.get("employee2")
-        orig_date = data.get("original_date")
-        new_date = data.get("new_date")
+        orig_date = parser.parse(orig_date).date()
+        new_date = parser.parse(new_date).date()
+    except Exception:
+        return jsonify({"success": False, "message": f"Invalid date format: {orig_date}, {new_date}"}), 400
 
-        if not all([emp1, emp2, orig_date, new_date]):
-            return jsonify({"success": False, "message": "Missing fields"}), 400
+    # ✅ Fetch schedules for both dates
+    orig_schedules = Schedule.query.filter_by(date=orig_date).all()
+    new_schedules = Schedule.query.filter_by(date=new_date).all()
 
-        # Normalize dates (assume YYYY-MM-DD from Google Form/Zapier)
-        try:
-            orig_date = datetime.strptime(orig_date, "%Y-%m-%d").date()
-            new_date = datetime.strptime(new_date, "%Y-%m-%d").date()
-        except ValueError:
-            return jsonify({"success": False, "message": "Invalid date format"}), 400
+    if not orig_schedules or not new_schedules:
+        return jsonify({"success": False, "message": "No schedule found for given dates"}), 404
 
-        # Find shifts
-        s1 = Schedule.query.filter_by(employee=emp1, date=orig_date).first()
-        s2 = Schedule.query.filter_by(employee=emp2, date=new_date).first()
+    # ✅ Helper: fuzzy match employee names (Zapier may send variations)
+    def find_schedule_by_employee(schedules, name):
+        names = [s.employee for s in schedules]
+        match = difflib.get_close_matches(name, names, n=1, cutoff=0.6)
+        if match:
+            return next((s for s in schedules if s.employee == match[0]), None)
+        return None
 
-        if not s1 or not s2:
-            return jsonify({"success": False, "message": "Shifts not found"}), 404
+    sched1 = find_schedule_by_employee(orig_schedules, emp1)
+    sched2 = find_schedule_by_employee(new_schedules, emp2)
 
-        # Swap employees
-        s1.employee, s2.employee = s2.employee, s1.employee
-        db.session.commit()
+    if not sched1 or not sched2:
+        return jsonify({"success": False, "message": "Could not find employees in given schedules"}), 404
 
-        return jsonify({"success": True, "message": "Shifts swapped successfully"}), 200
+    # ✅ Swap employees
+    sched1.employee, sched2.employee = sched2.employee, sched1.employee
+    db.session.commit()
 
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+    return jsonify({
+        "success": True,
+        "message": f"Swapped {sched1.employee} and {sched2.employee} between {orig_date} and {new_date}"
+    })
 
 
 
