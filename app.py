@@ -112,6 +112,56 @@ def add_employee_by_name():
         "department": dept.name, "group_num": emp.group_num
     }), 201
 
+@app.route("/employees/remove_by_name", methods=["POST"])
+def remove_employee_by_name():
+    """
+    Remove an employee by name + department.
+    Preserves swapped (override=True) schedules.
+    Example body:
+    {
+      "name": "Jane Doe",
+      "department_name": "CSR"
+    }
+    """
+    body = request.get_json(force=True)
+    emp_name = body.get("name", "").strip()
+    dept_name = body.get("department_name", "").strip()
+
+    if not emp_name or not dept_name:
+        return jsonify({"error": "name and department_name are required"}), 400
+
+    # Find department
+    dept = Department.query.filter(Department.name.ilike(dept_name)).first()
+    if not dept:
+        return jsonify({"error": f"Department {dept_name} not found"}), 404
+
+    # Find employee in that department
+    emp = Employee.query.filter(
+        Employee.name.ilike(emp_name),
+        Employee.department_id == dept.id
+    ).first()
+
+    if not emp:
+        return jsonify({"error": f"Employee {emp_name} not found in {dept_name}"}), 404
+
+    today = date.today()
+
+    # Delete only future non-overridden schedules for this employee
+    Schedule.query.filter(
+        Schedule.employee_id == emp.id,
+        Schedule.date >= today,
+        Schedule.override == False
+    ).delete()
+
+    # Delete employee
+    db.session.delete(emp)
+    db.session.commit()
+
+    return jsonify({
+        "message": f"Employee {emp.name} removed from {dept.name}. "
+                   f"Swapped (override) shifts were preserved."
+    }), 200
+
 
 @app.route("/employees", methods=["GET"])
 def list_employees():
