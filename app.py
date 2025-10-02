@@ -289,7 +289,7 @@ from models import db, Schedule
 from dateutil import parser
 import difflib
 
-app = Flask(__name__)
+
 
 @app.route("/swap", methods=["POST"])
 def swap_shift():
