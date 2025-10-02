@@ -82,6 +82,39 @@ def list_departments():
     depts = Department.query.order_by(Department.id).all()
     return jsonify([{"id": d.id, "name": d.name} for d in depts])
 
+@app.route("/employees", methods=["POST"])
+def add_employee():
+    body = request.get_json(force=True)
+    name = body.get("name", "").strip()
+    dept_id = body.get("department_id")
+    group_num = body.get("group_num")
+
+    if not name or not dept_id:
+        return jsonify({"error": "name and department_id are required"}), 400
+
+    dept = Department.query.get(dept_id)
+    if not dept:
+        return jsonify({"error": f"Department ID {dept_id} not found"}), 404
+
+    if dept.name == "Spec Ops":
+        group_num = int(group_num) if group_num else None
+        if group_num and group_num not in (1,2,3,4):
+            return jsonify({"error": "group_num must be 1..4 for Spec Ops"}), 400
+    else:
+        group_num = None
+
+    emp = Employee(name=name, department_id=dept.id, group_num=group_num)
+    db.session.add(emp)
+    db.session.commit()
+
+    return jsonify({
+        "id": emp.id,
+        "name": emp.name,
+        "department": dept.name,
+        "group_num": emp.group_num
+    }), 201
+
+
 # ---------- Employees ----------
 @app.route("/employees/add_by_name", methods=["POST"])
 def add_employee_by_name():
