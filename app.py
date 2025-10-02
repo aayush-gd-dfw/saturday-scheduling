@@ -293,7 +293,7 @@ def generate_schedule():
         if DEPT_DAL in departments and idx_in_month >= 3:
             req[DEPT_DAL] = 1
         if DEPT_CAR in departments:
-            req[DEPT_CAR] = 3  # Corey + 2 others
+            req[DEPT_CAR] = 2  # Corey + 1 others
         if DEPT_COLDEN in departments and idx_in_month != 4:
             req[DEPT_COLDEN] = 1
         if DEPT_SPEC_OPS in departments:
