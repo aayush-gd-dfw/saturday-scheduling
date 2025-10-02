@@ -286,26 +286,45 @@ def get_schedule():
 
 from flask import request, jsonify
 
+from flask import request, jsonify
+from datetime import datetime
+from models import Schedule, db
+
 @app.route("/swap", methods=["POST"])
 def swap_shift():
-    data = request.get_json()
-    emp1 = data.get("employee1")
-    emp2 = data.get("employee2")
-    orig_date = data.get("original_date")
-    new_date = data.get("new_date")
+    try:
+        data = request.get_json(force=True)
+        emp1 = data.get("employee1")
+        emp2 = data.get("employee2")
+        orig_date = data.get("original_date")
+        new_date = data.get("new_date")
 
-    # Find schedules in DB (SQLAlchemy or JSON storage)
-    s1 = Schedule.query.filter_by(employee=emp1, date=orig_date).first()
-    s2 = Schedule.query.filter_by(employee=emp2, date=new_date).first()
+        if not all([emp1, emp2, orig_date, new_date]):
+            return jsonify({"success": False, "message": "Missing fields"}), 400
 
-    if not s1 or not s2:
-        return jsonify({"success": False, "message": "Could not find matching shifts"}), 400
+        # Normalize dates (assume YYYY-MM-DD from Google Form/Zapier)
+        try:
+            orig_date = datetime.strptime(orig_date, "%Y-%m-%d").date()
+            new_date = datetime.strptime(new_date, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"success": False, "message": "Invalid date format"}), 400
 
-    # Swap employees
-    s1.employee, s2.employee = s2.employee, s1.employee
-    db.session.commit()
+        # Find shifts
+        s1 = Schedule.query.filter_by(employee=emp1, date=orig_date).first()
+        s2 = Schedule.query.filter_by(employee=emp2, date=new_date).first()
 
-    return jsonify({"success": True, "message": "Shifts swapped successfully!"})
+        if not s1 or not s2:
+            return jsonify({"success": False, "message": "Shifts not found"}), 404
+
+        # Swap employees
+        s1.employee, s2.employee = s2.employee, s1.employee
+        db.session.commit()
+
+        return jsonify({"success": True, "message": "Shifts swapped successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
 
 
 @app.route("/schedule", methods=["DELETE"])
