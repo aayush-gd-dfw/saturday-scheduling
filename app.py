@@ -366,15 +366,18 @@ from werkzeug.utils import secure_filename
 def import_schedule():
     """
     Import schedule from uploaded CSV file.
-    CSV format: date,department,employee
+    Expected columns: date, department, employee
+    Accepts dates in formats like MM/DD/YYYY, MM-DD-YYYY, or YYYY-MM-DD.
     """
+    import csv
+    from werkzeug.utils import secure_filename
+    from dateutil import parser
 
     if "file" not in request.files:
         return jsonify({"error": "CSV file is required"}), 400
 
     file = request.files["file"]
     filename = secure_filename(file.filename)
-
     if not filename.lower().endswith(".csv"):
         return jsonify({"error": "File must be a .csv"}), 400
 
@@ -383,9 +386,16 @@ def import_schedule():
 
     for row in reader:
         try:
-            d = date.fromisoformat(row["date"].strip())
+            raw_date = row["date"].strip()
             dept_name = row["department"].strip()
             emp_name = row["employee"].strip()
+
+            # ✅ Flexible date parsing (supports MM/DD/YYYY, etc.)
+            try:
+                d = parser.parse(raw_date, dayfirst=False).date()
+            except Exception:
+                skipped.append(f"Invalid date format: {raw_date}")
+                continue
 
             dept = Department.query.filter(Department.name.ilike(dept_name)).first()
             if not dept:
@@ -400,13 +410,12 @@ def import_schedule():
                 skipped.append(f"Emp not found: {emp_name} ({d}, {dept_name})")
                 continue
 
-            # Remove any non-override existing schedule
+            # Remove old schedules (non-overrides) for that date/department
             existing = Schedule.query.filter_by(date=d, department_id=dept.id).all()
             for e in existing:
                 if not e.override:
                     db.session.delete(e)
 
-            # Insert new row
             db.session.add(Schedule(
                 date=d,
                 department_id=dept.id,
@@ -423,6 +432,7 @@ def import_schedule():
         "message": f"Imported {imported} rows",
         "skipped": skipped
     })
+
 
 
 # ---------- Schedule read / swap / delete ----------
