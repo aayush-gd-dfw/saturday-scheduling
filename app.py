@@ -265,9 +265,36 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
+    # 🧩 Handle new or removed employees gracefully
+    for dept_name, dept in departments.items():
+        future_emp_ids = {
+            s.employee_id for s in Schedule.query.filter(
+                Schedule.department_id == dept.id,
+                Schedule.date >= today
+            )
+        }
+        current_emp_ids = {e.id for e in dept.employees}
+        new_emp_ids = current_emp_ids - future_emp_ids
+
+        # If new employee found, append them to the end of rotation
+        if new_emp_ids:
+            q = rot[dept_name]
+            for emp in sorted(dept.employees, key=lambda e: e.id):
+                if emp.id in new_emp_ids and emp not in q:
+                    q.append(emp)
+
+        # Detect removed employees (in schedule but no longer in department)
+        removed_emp_ids = future_emp_ids - current_emp_ids
+        if removed_emp_ids:
+            Schedule.query.filter(
+                Schedule.department_id == dept.id,
+                Schedule.employee_id.in_(removed_emp_ids),
+                Schedule.date >= today,
+                Schedule.override == False
+            ).delete(synchronize_session=False)
+
     # --- Detect departments needing update ---
     missing_by_dept = {}
-
     for dept_name, dept in departments.items():
         all_schedules = Schedule.query.filter_by(department_id=dept.id).all()
         dates_with_emps = defaultdict(set)
@@ -316,7 +343,7 @@ def generate_schedule():
                         q.rotate(-1)
                     q.rotate(-1)
 
-        # clean only these dates
+        # Clean only these dates
         Schedule.query.filter(
             Schedule.department_id == dept.id,
             Schedule.date.in_(target_dates),
@@ -324,84 +351,72 @@ def generate_schedule():
         ).delete(synchronize_session=False)
 
         emps = sorted(dept.employees, key=lambda e: e.id)
+        first_sat_year = coming_saturday(date(year, 1, 1))
+        all_year_sats = list(saturdays_between(first_sat_year, end))
 
         for idx, sat in enumerate(target_dates):
+            if sat not in all_year_sats:
+                continue
             month_sats = by_month[(sat.year, sat.month)]
-            idx_in_month = month_sats.index(sat) + 1
-            week_num = idx + 1
-            group_for_week = ((week_num - 1) % 4) + 1
+            week_index = all_year_sats.index(sat)
+            group_for_week = ((week_index - 1) % 4) + 1
 
             # === DEPARTMENT RULES ===
             if dept_name == DEPT_SPEC_OPS:
                 group = spec_ops_groups.get(group_for_week, [])
                 for emp in group:
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
 
             elif dept_name == DEPT_CAR:
                 used = set()
                 if corey_emp:
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=corey_emp.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=corey_emp.id, override=False))
                     used.add(corey_emp.id)
                 cand = next_from_deque(q)
                 if cand and cand.id not in used:
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=cand.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=cand.id, override=False))
 
             elif dept_name == DEPT_AUTO:
                 # --- AUTO: 1 ON, 1 OFF alternating pattern ---
-                emps = sorted(departments[DEPT_AUTO].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
-                week_index = all_year_sats.index(sat)  # absolute index in year
-                cycle_len = 2  # 1 ON, 1 OFF
+                cycle_len = 2  # ON, OFF
                 cycle_pos = week_index % cycle_len
-
-                if cycle_pos == 0:  # ON week
-                    # Which employee should work this ON week
+                if cycle_pos == 0:
                     on_index = (week_index // cycle_len) % len(emps)
                     emp = emps[on_index]
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                # cycle_pos == 1 → blank week
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
 
             elif dept_name == DEPT_DAL:
                 # --- DAL: 2 ON, 2 OFF pattern ---
-                emps = sorted(departments[DEPT_DAL].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
-                week_index = all_year_sats.index(sat)
-                cycle_len = 4  # 2 ON, 2 OFF
+                cycle_len = 4
                 cycle_pos = week_index % cycle_len
-
-                if cycle_pos in (0, 1):  # ON weeks
-                    # Employee assignment cycles through list normally
+                if cycle_pos in (0, 1):
                     emp_index = cycle_pos % len(emps)
                     emp = emps[emp_index]
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                # cycle_pos 2,3 -> blank
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
 
             elif dept_name == DEPT_COLDEN:
                 # --- COL/DEN: 3 ON, 1 OFF pattern ---
-                emps = sorted(departments[DEPT_COLDEN].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
-                week_index = all_year_sats.index(sat)
-                cycle_len = 4  # 3 ON, 1 OFF
+                cycle_len = 4
                 cycle_pos = week_index % cycle_len
-
-                if cycle_pos in (0, 1, 2):  # ON weeks
+                if cycle_pos in (0, 1, 2):
                     emp_index = cycle_pos % len(emps)
                     emp = emps[emp_index]
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                # cycle_pos 3 -> blank
-
-                # cycle_pos 3 -> blank
-
-                # OFF → blank
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
 
             elif dept_name == DEPT_SHOP:
-                # normal rotation + Tommy when Edwin works
+                # --- SHOP: rotation + Tommy joins Edwin ---
                 edwin = next((e for e in emps if e.name.strip() == "Edwin"), None)
                 tommy = next((e for e in emps if e.name.lower().startswith("tommy")), None)
                 emp = next_from_deque(q)
@@ -409,18 +424,21 @@ def generate_schedule():
                     q = deque(emps)
                     emp = next_from_deque(q)
                 if emp:
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
                     if edwin and tommy and emp.name.strip() == "Edwin":
-                        db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
+                        db.session.add(Schedule(date=sat, department_id=dept.id,
+                                                employee_id=tommy.id, override=False))
 
             else:
-                # default rotation
+                # --- Default 1-per-week rotation ---
                 emp = next_from_deque(q)
                 if not emp:
                     q = deque(emps)
                     emp = next_from_deque(q)
                 if emp:
-                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id,
+                                            employee_id=emp.id, override=False))
 
     db.session.commit()
     return jsonify({
@@ -428,6 +446,7 @@ def generate_schedule():
         "affected_departments": list(missing_by_dept.keys()),
         "details": {k: [d.isoformat() for d in v] for k, v in missing_by_dept.items()}
     })
+
 
 
 @app.route("/api/next_saturday_assignments", methods=["GET"])
