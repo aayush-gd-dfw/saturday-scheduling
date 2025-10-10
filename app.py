@@ -201,27 +201,23 @@ def add_holiday():
     db.session.commit()
     return jsonify({"date": hdate.isoformat(), "note": note})
 
-@app.route("/holidays", methods=["GET"])
-def list_holidays():
-    hols = Holiday.query.order_by(Holiday.date).all()
-    return jsonify([{"date": h.date.isoformat(), "note": h.note} for h in hols])
-
 @app.route("/schedule/generate", methods=["POST"])
 def generate_schedule():
     """
-    Future-only repair:
-      • Does NOT rewrite existing rows (no blanket deletes).
-      • Fills only missing coverage per department/date.
-      • Department rules:
+    Future-only schedule repair:
+      - Does NOT rewrite or delete valid rows.
+      - Fills only missing ON weeks based on department rules.
+      - OFF-week blanks are respected (never treated as missing).
+      - New employees are appended to rotation tail (used when gaps exist).
+      - Removed employees: only their future non-override rows are cleared.
+      - Rules:
           AUTO    → 1 ON, 1 OFF
           DAL     → 2 ON, 2 OFF
           COL/DEN → 3 ON, 1 OFF
           CAR     → Corey + 1 rotating partner
-          SPEC OPS→ group 1..4 (assign whole group)
-          SHOP    → 1-per-week rotation (Tommy NOT in rotation) + add Tommy if exact "Edwin" works
-          Others  → single slot (1)
-      • Removed employees: only their future non-override rows are deleted.
-      • New employees: appended to end of rotation; used only when gaps exist.
+          SPEC OPS→ group 1..4 (assign all in group)
+          SHOP    → 1-per-week (Tommy excluded) + add Tommy when Edwin works
+          Others  → 1-per-week
     """
     from datetime import date
     from collections import deque, defaultdict
@@ -238,44 +234,41 @@ def generate_schedule():
     if coming_sat > end:
         return jsonify({"message": f"No Saturdays remaining in {year}."})
 
-    # Holidays: do not schedule on these
+    # --- Collect holidays ---
     holiday_set = {h.date for h in Holiday.query.all()}
 
-    # Future saturdays we can schedule on (skip holidays)
+    # --- Future Saturdays (skip holidays) ---
     all_future_sats = [d for d in saturdays_between(coming_sat, end) if d not in holiday_set]
 
-    # Year-long Saturdays for stable cycle index (include holidays)
+    # --- Year-wide Saturdays for stable pattern index ---
     first_sat_year = coming_saturday(date(year, 1, 1))
     all_year_sats = list(saturdays_between(first_sat_year, end))
-
-    # Quick lookup for index
     year_index = {d: i for i, d in enumerate(all_year_sats)}
 
+    # --- Department map ---
     departments = {d.name: d for d in Department.query.all()}
 
-    # ---- rotation helper ----
+    # --- rotation helper (SHOP excludes Tommy) ---
     def dept_rotation(dept_name: str) -> deque:
         d = departments.get(dept_name)
         if not d:
             return deque()
         emps = list(d.employees)
-        # SHOP: Tommy is NOT part of the rotation
         if dept_name == DEPT_SHOP:
             emps = [e for e in emps if not e.name.strip().lower().startswith("tommy")]
         return deque(sorted(emps, key=lambda e: e.id))
 
     rot = {name: dept_rotation(name) for name in departments.keys()}
 
-    # ---- Spec Ops groups 1..4 ----
+    # --- Spec Ops groups ---
     spec_ops_groups = {
         g: sorted(
             [e for e in departments.get(DEPT_SPEC_OPS, Department(name="")).employees if e.group_num == g],
             key=lambda e: e.id
-        )
-        for g in (1, 2, 3, 4)
+        ) for g in (1, 2, 3, 4)
     }
 
-    # ---- CAR: Corey always; rotation excludes Corey ----
+    # --- CAR: Corey always; rotation excludes Corey ---
     corey_emp = None
     if DEPT_CAR in departments:
         car_all = list(departments[DEPT_CAR].employees)
@@ -288,8 +281,7 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # ---- new/removed employees (non-destructive) ----
-    # Append new employees at tail of rotation; remove only removed employees' future rows
+    # --- Handle new/removed employees ---
     for dept_name, dept in departments.items():
         future_rows = Schedule.query.filter(
             Schedule.department_id == dept.id,
@@ -298,7 +290,7 @@ def generate_schedule():
         future_emp_ids = {s.employee_id for s in future_rows}
         current_emp_ids = {e.id for e in dept.employees}
 
-        # New employees → append to rotation tail
+        # Add new employees to rotation
         new_emp_ids = current_emp_ids - future_emp_ids
         if new_emp_ids:
             q = rot[dept_name]
@@ -307,7 +299,7 @@ def generate_schedule():
                 if e.id in new_emp_ids and e.id not in q_ids:
                     q.append(e)
 
-        # Removed employees → delete only their future non-override rows
+        # Remove future schedules of removed employees
         removed_emp_ids = future_emp_ids - current_emp_ids
         if removed_emp_ids:
             Schedule.query.filter(
@@ -317,18 +309,31 @@ def generate_schedule():
                 Schedule.override == False
             ).delete(synchronize_session=False)
 
-    # ---- snapshot assignments so we never double-assign ----
-    existing_future = Schedule.query.filter(Schedule.date.in_(all_future_sats)).all()
-    assigned_map: dict[tuple[int, date], set] = defaultdict(set)  # (dept_id, date) -> {emp_id}
-    for r in existing_future:
+    # --- Snapshot all assigned future schedules ---
+    future_rows = Schedule.query.filter(Schedule.date.in_(all_future_sats)).all()
+    assigned_map = defaultdict(set)
+    for r in future_rows:
         assigned_map[(r.department_id, r.date)].add(r.employee_id)
 
-    # ---- fairness: for single-slot depts, start after the last assignee before coming_sat ----
+    # --- Cycle config ---
+    CYCLE_CFG = {
+        DEPT_AUTO:   {"len": 2, "on_positions": (0,)},
+        DEPT_DAL:    {"len": 4, "on_positions": (0, 1)},
+        DEPT_COLDEN: {"len": 4, "on_positions": (0, 1, 2)},
+    }
+
+    # --- Week ON/OFF helper ---
+    def is_on_week(dept_name: str, sat: date) -> bool:
+        if dept_name not in CYCLE_CFG:
+            return True  # Always ON for single-slot depts
+        cfg = CYCLE_CFG[dept_name]
+        return (year_index[sat] % cfg["len"]) in cfg["on_positions"]
+
+    # --- Fairness rotation align ---
     for dept_name, dept in departments.items():
         q = rot[dept_name]
         if not q:
             continue
-        # Find last date < coming_sat that had exactly 1 worker
         last_row = (Schedule.query
                     .filter(Schedule.department_id == dept.id, Schedule.date < coming_sat)
                     .order_by(Schedule.date.desc())
@@ -338,129 +343,76 @@ def generate_schedule():
             if len(same_day) == 1:
                 last_emp_id = same_day[0].employee_id
                 if any(e.id == last_emp_id for e in q):
-                    while q and q[0].id != last_emp_id:
+                    while q[0].id != last_emp_id:
                         q.rotate(-1)
-                    q.rotate(-1)  # start AFTER who last worked
+                    q.rotate(-1)
 
-    # ---- helpers ----
-    def add_if_missing(dpt, dte, emp_obj):
+    # --- Helper to add safely ---
+    def add_if_missing(dpt, dte, emp):
         key = (dpt.id, dte)
-        if emp_obj and emp_obj.id not in assigned_map[key]:
-            db.session.add(Schedule(date=dte, department_id=dpt.id, employee_id=emp_obj.id, override=False))
-            assigned_map[key].add(emp_obj.id)
+        if emp and emp.id not in assigned_map[key]:
+            db.session.add(Schedule(date=dte, department_id=dpt.id, employee_id=emp.id, override=False))
+            assigned_map[key].add(emp.id)
 
-    def pick_from_rotation(q: deque, forbidden_ids: set | None = None):
-        if not q:
-            return None
-        forbidden_ids = forbidden_ids or set()
-        for _ in range(len(q)):
-            cand = next_from_deque(q)
-            if cand and cand.id not in forbidden_ids:
-                return cand
-        return None
-
-    # Cycle expectations per dept
-    CYCLE_CFG = {
-        DEPT_AUTO:   {"len": 2, "on_positions": (0,)},        # 1 ON, 1 OFF
-        DEPT_DAL:    {"len": 4, "on_positions": (0, 1)},      # 2 ON, 2 OFF
-        DEPT_COLDEN: {"len": 4, "on_positions": (0, 1, 2)},   # 3 ON, 1 OFF
-    }
-
-    # Employee sequence mapping that doesn’t overwrite:
-    # If a date already has someone, we respect it; otherwise we choose the next fair person
-    def cycle_employee_for(dept_name: str, dept_obj, sat: date):
-        cfg = CYCLE_CFG[dept_name]
-        emps_sorted = sorted(dept_obj.employees, key=lambda e: e.id)
-        if not emps_sorted:
-            return None
-        wi = year_index[sat]
-        cycle_pos = wi % cfg["len"]
-        if cycle_pos not in cfg["on_positions"]:
-            return None  # OFF week → expect blank
-
-        # Determine how many ON-weeks have occurred up to this sat (year-based)
-        on_per_cycle = len(cfg["on_positions"])
-        cycles_completed = wi // cfg["len"]
-        pos_in_on_this_cycle = cfg["on_positions"].index(cycle_pos)
-        on_index = cycles_completed * on_per_cycle + pos_in_on_this_cycle
-
-        # Map to employee index, but do NOT overwrite: if someone already assigned, keep them
-        already = assigned_map[(dept_obj.id, sat)]
-        if already:
-            # keep existing selection; we only fill if blank
-            return None
-
-        # Choose based on on_index (fair, stable, year-based)
-        return emps_sorted[on_index % len(emps_sorted)]
-
-    # ---- MAIN: walk each department and each future Saturday, add only what's missing ----
+    # --- MAIN LOOP ---
     for dept_name, dept in departments.items():
         q = rot[dept_name]
-        emps_sorted = sorted(dept.employees, key=lambda e: e.id)
+        emps = sorted(dept.employees, key=lambda e: e.id)
 
         for sat in all_future_sats:
-            if sat not in year_index:
-                continue  # safety
             key = (dept.id, sat)
             already_ids = assigned_map.get(key, set())
 
-            # === SPEC OPS: assign whole group for the week (add missing only) ===
+            # SPEC OPS → group assignment
             if dept_name == DEPT_SPEC_OPS:
-                wi = year_index[sat]
-                group_for_week = (wi % 4) + 1
-                group = spec_ops_groups.get(group_for_week, [])
-                for emp in group:
+                group_for_week = (year_index[sat] % 4) + 1
+                for emp in spec_ops_groups.get(group_for_week, []):
                     add_if_missing(dept, sat, emp)
                 continue
 
-            # === CAR: Corey + exactly 1 rotating partner (add missing only) ===
+            # CAR → Corey + one partner
             if dept_name == DEPT_CAR:
-                # Ensure Corey is there
                 if corey_emp:
                     add_if_missing(dept, sat, corey_emp)
-                # Ensure exactly 1 partner (besides Corey)
-                partner_ids = {eid for eid in assigned_map[key] if (not corey_emp or eid != corey_emp.id)}
+                partner_ids = [eid for eid in assigned_map[key] if (not corey_emp or eid != corey_emp.id)]
                 if len(partner_ids) < 1 and q:
-                    cand = pick_from_rotation(q, forbidden_ids={corey_emp.id} if corey_emp else set())
-                    if cand:
+                    cand = next_from_deque(q)
+                    if cand and (not corey_emp or cand.id != corey_emp.id):
                         add_if_missing(dept, sat, cand)
                 continue
 
-            # === AUTO / DAL / COL/DEN: cycle-based expectations (add missing only) ===
+            # AUTO, DAL, COL/DEN → respect ON/OFF pattern
             if dept_name in CYCLE_CFG:
-                emp = cycle_employee_for(dept_name, dept, sat)
-                if emp:
-                    add_if_missing(dept, sat, emp)
-                # OFF weeks → do nothing (keep blank if blank)
+                if is_on_week(dept_name, sat):
+                    if len(already_ids) < 1:
+                        emps_sorted = sorted(emps, key=lambda e: e.id)
+                        idx = (year_index[sat] // CYCLE_CFG[dept_name]["len"]) % len(emps_sorted)
+                        emp = emps_sorted[idx]
+                        add_if_missing(dept, sat, emp)
                 continue
 
-            # === SHOP: 1-per-week rotation (Tommy not in rotation) + auto Tommy if Edwin ===
+            # SHOP → 1-per-week + Tommy joins Edwin
             if dept_name == DEPT_SHOP:
-                # If nobody yet, pick next from rotation (which excludes Tommy)
                 if len(already_ids) < 1 and q:
-                    chosen = pick_from_rotation(q)
-                    if chosen:
-                        add_if_missing(dept, sat, chosen)
+                    emp = next_from_deque(q)
+                    if emp:
+                        add_if_missing(dept, sat, emp)
 
-                # If Edwin (exact) is assigned but Tommy is not, add Tommy too
-                edwin_exact = next((e for e in emps_sorted if e.name.strip() == "Edwin"), None)
-                tommy = next((e for e in emps_sorted if e.name.strip().lower().startswith("tommy")), None)
-                if edwin_exact and tommy and edwin_exact.id in assigned_map[key] and tommy.id not in assigned_map[key]:
+                edwin = next((e for e in emps if e.name.strip() == "Edwin"), None)
+                tommy = next((e for e in emps if e.name.strip().lower().startswith("tommy")), None)
+                if edwin and tommy and edwin.id in assigned_map[key] and tommy.id not in assigned_map[key]:
                     add_if_missing(dept, sat, tommy)
                 continue
 
-            # === DEFAULT single-slot depts (Dispatch (MOD), CSR, Spec Ops office, ARL, etc.) ===
+            # DEFAULT single-slot
             if len(already_ids) < 1:
-                choice = pick_from_rotation(q)
-                if not choice and emps_sorted:
-                    # rebuild a tiny deque if rotation emptied
-                    q = deque(emps_sorted)
-                    choice = pick_from_rotation(q)
-                if choice:
-                    add_if_missing(dept, sat, choice)
+                emp = next_from_deque(q)
+                if emp:
+                    add_if_missing(dept, sat, emp)
 
     db.session.commit()
-    return jsonify({"message": "✅ Future schedule repaired: only missing slots filled (no rewrites)."})
+    return jsonify({"message": "✅ Future schedule repaired (ON-weeks only, OFF blanks preserved)."})
+
 
 
 
