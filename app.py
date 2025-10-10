@@ -210,10 +210,12 @@ def list_holidays():
 def generate_schedule():
     """
     Generate or repair schedule:
-      - If everything is fine, does nothing.
-      - If any department has missing Saturdays, regenerates only that department's missing weeks.
-      - Keeps all other departments untouched.
-      - Includes Tommy–Edwin pairing, Spec Ops groups, Auto/DAL/COL-DEN custom rules, etc.
+      - Repairs only missing or new employee schedules.
+      - Regenerates only future dates (from coming Saturday).
+      - Removes duplicate future entries before regenerating.
+      - Skips past weeks.
+      - Respects department-specific rules (Spec Ops groups, Auto/DAL/COL-DEN custom cycles, Corey rule, Tommy–Edwin pairing, etc.)
+      - Ensures rotation continues based on who worked last.
     """
     import json
     from datetime import date
@@ -272,8 +274,7 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # --- Detect missing coverage ---
-# --- Detect missing coverage or new employees ---
+    # --- Detect missing coverage or new employees ---
     missing_by_dept = {}
     today = date.today()
 
@@ -302,23 +303,41 @@ def generate_schedule():
     if not missing_by_dept:
         return jsonify({"message": "✅ Schedule is complete. No repair needed."})
 
-
     # --- MAIN LOOP (only for missing departments) ---
-# --- MAIN LOOP (only for missing departments) ---
     for dept_name, missing_dates in missing_by_dept.items():
         dept = departments[dept_name]
         q = rot[dept_name]
-
-        # 🧹 Step 1: Clean up future schedules for this department
-        # (remove all non-override rows from coming Saturday onward)
         coming_sat = coming_saturday(date.today())
+
+        # 🧭 Align rotation with whoever worked last
+        last_saturday_row = (
+            Schedule.query.filter(
+                Schedule.department_id == dept.id,
+                Schedule.date < coming_sat
+            ).order_by(Schedule.date.desc()).first()
+        )
+        if last_saturday_row:
+            last_saturday = last_saturday_row.date
+            last_emp_rows = Schedule.query.filter_by(
+                department_id=dept.id, date=last_saturday
+            ).all()
+            if last_emp_rows:
+                # For single-employee-per-week departments: skip the last person
+                if len(last_emp_rows) == 1:
+                    last_emp_id = last_emp_rows[0].employee_id
+                    if q and any(e.id == last_emp_id for e in q):
+                        while q[0].id != last_emp_id:
+                            q.rotate(-1)
+                        q.rotate(-1)  # move past last person
+
+        # 🧹 Clean up future schedules for this department
         Schedule.query.filter(
             Schedule.department_id == dept.id,
             Schedule.date >= coming_sat,
             Schedule.override == False
         ).delete()
 
-        # 🧱 Step 2: Rebuild the schedule for missing/future dates only
+        # 🧱 Rebuild the schedule for missing/future dates
         for sat in missing_dates:
             month_sats = by_month[(sat.year, sat.month)]
             idx_in_month = month_sats.index(sat) + 1
@@ -389,13 +408,13 @@ def generate_schedule():
                 if emp:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
 
-
     db.session.commit()
     return jsonify({
-        "message": "🛠️ Schedule repaired for missing weeks only.",
+        "message": "🛠️ Schedule repaired and regenerated for future dates.",
         "fixed_departments": list(missing_by_dept.keys()),
         "details": {k: [d.isoformat() for d in v] for k, v in missing_by_dept.items()}
     })
+
 
 
 
