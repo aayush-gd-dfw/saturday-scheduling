@@ -347,34 +347,57 @@ def generate_schedule():
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=cand.id, override=False))
 
             elif dept_name == DEPT_AUTO:
-                # ON/OFF alternating
+                # --- AUTO: 1 ON, 1 OFF alternating pattern ---
+                emps = sorted(departments[DEPT_AUTO].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                cycle_pos = idx % (len(emps) * 2)
-                # Assign employee only on even slots (ON weeks)
-                if cycle_pos % 2 == 0:
-                    emp = emps[(cycle_pos // 2) % len(emps)]
+                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
+                week_index = all_year_sats.index(sat)  # absolute index in year
+                cycle_len = 2  # 1 ON, 1 OFF
+                cycle_pos = week_index % cycle_len
+
+                if cycle_pos == 0:  # ON week
+                    # Which employee should work this ON week
+                    on_index = (week_index // cycle_len) % len(emps)
+                    emp = emps[on_index]
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                # Odd slots → blank
+                # cycle_pos == 1 → blank week
 
             elif dept_name == DEPT_DAL:
-                # 2 ON, 2 OFF
+                # --- DAL: 2 ON, 2 OFF pattern ---
+                emps = sorted(departments[DEPT_DAL].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                pos = idx % 4
-                if pos in (0, 1):  # ON
-                    emp = emps[pos % len(emps)]
+                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
+                week_index = all_year_sats.index(sat)
+                cycle_len = 4  # 2 ON, 2 OFF
+                cycle_pos = week_index % cycle_len
+
+                if cycle_pos in (0, 1):  # ON weeks
+                    # Employee assignment cycles through list normally
+                    emp_index = cycle_pos % len(emps)
+                    emp = emps[emp_index]
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                # OFF → blank
+                # cycle_pos 2,3 -> blank
 
             elif dept_name == DEPT_COLDEN:
-                # 3 ON, 1 OFF
+                # --- COL/DEN: 3 ON, 1 OFF pattern ---
+                emps = sorted(departments[DEPT_COLDEN].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                pos = idx % 4
-                if pos in (0, 1, 2):  # ON
-                    emp = emps[pos % len(emps)]
+                all_year_sats = list(saturdays_between(date(year, 1, 1), end))
+                week_index = all_year_sats.index(sat)
+                cycle_len = 4  # 3 ON, 1 OFF
+                cycle_pos = week_index % cycle_len
+
+                if cycle_pos in (0, 1, 2):  # ON weeks
+                    emp_index = cycle_pos % len(emps)
+                    emp = emps[emp_index]
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                # cycle_pos 3 -> blank
+
+                # cycle_pos 3 -> blank
+
                 # OFF → blank
 
             elif dept_name == DEPT_SHOP:
