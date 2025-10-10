@@ -241,6 +241,12 @@ def generate_schedule():
 
     departments = {d.name: d for d in Department.query.all()}
 
+    edwin_exact, tommy = None, None
+    if DEPT_SHOP in departments:
+        shop_emps = list(departments[DEPT_SHOP].employees)
+        edwin_exact = next((e for e in shop_emps if e.name.strip() == "Edwin"), None)
+        tommy = next((e for e in shop_emps if e.name.lower().startswith("tommy")), None)
+
     # build employee rotations
     def dept_employees(dept_name: str):
         d = departments.get(dept_name)
