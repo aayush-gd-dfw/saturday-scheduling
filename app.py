@@ -223,7 +223,12 @@ def generate_schedule():
         * Shop → Tommy is mapped to Edwin
     """
     body = request.get_json(silent=True) or {}
-    year = int(body.get("year", date.today().year))
+    try:
+        year = int(body.get("year", date.today().year))
+        if year < 1:
+            raise ValueError
+    except Exception:
+        year = date.today().year
 
     start = coming_saturday(date.today())
     end = last_saturday_of_year(year)
