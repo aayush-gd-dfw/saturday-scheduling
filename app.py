@@ -343,7 +343,12 @@ def import_schedule():
     """
     Import schedule from uploaded CSV file.
     Expected columns: date, department, employee
-    Accepts dates in formats like MM/DD/YYYY, MM-DD-YYYY, or YYYY-MM-DD.
+
+    Rules:
+      - Accepts MM/DD/YYYY, MM-DD-YYYY, or YYYY-MM-DD
+      - Always keeps only ONE employee per (department, date)
+      - Last occurrence in the CSV wins
+      - Imports all rows (no skipping due to duplicates)
     """
     import csv
     from werkzeug.utils import secure_filename
@@ -366,7 +371,7 @@ def import_schedule():
             dept_name = row["department"].strip()
             emp_name = row["employee"].strip()
 
-            # ✅ Flexible date parsing (supports MM/DD/YYYY, etc.)
+            # Flexible date parsing (MM/DD/YYYY or YYYY-MM-DD)
             try:
                 d = parser.parse(raw_date, dayfirst=False).date()
             except Exception:
@@ -386,12 +391,10 @@ def import_schedule():
                 skipped.append(f"Emp not found: {emp_name} ({d}, {dept_name})")
                 continue
 
-            # Remove old schedules (non-overrides) for that date/department
-            existing = Schedule.query.filter_by(date=d, department_id=dept.id).all()
-            for e in existing:
-                if not e.override:
-                    db.session.delete(e)
+            # Remove all non-override entries for this department and date
+            Schedule.query.filter_by(date=d, department_id=dept.id, override=False).delete()
 
+            # Add the new row (last one in CSV wins if duplicates exist)
             db.session.add(Schedule(
                 date=d,
                 department_id=dept.id,
@@ -405,9 +408,10 @@ def import_schedule():
 
     db.session.commit()
     return jsonify({
-        "message": f"Imported {imported} rows",
+        "message": f"Imported {imported} rows (duplicates replaced per department/date)",
         "skipped": skipped
     })
+
 
 
 
