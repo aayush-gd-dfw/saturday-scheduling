@@ -213,9 +213,11 @@ def generate_schedule():
       - If everything is fine, does nothing.
       - If any department has missing Saturdays, regenerates only that department's missing weeks.
       - Keeps all other departments untouched.
-      - Includes Tommy–Edwin pairing, Spec Ops rules, etc.
+      - Includes Tommy–Edwin pairing, Spec Ops groups, Auto/DAL/COL-DEN custom rules, etc.
     """
     import json
+    from datetime import date
+    from collections import deque
     from pathlib import Path
 
     body = request.get_json(silent=True) or {}
@@ -240,7 +242,7 @@ def generate_schedule():
 
     departments = {d.name: d for d in Department.query.all()}
 
-    # --- Prepare rotation deque per department ---
+    # --- Helper: prepare rotation deque ---
     def dept_employees(dept_name: str):
         d = departments.get(dept_name)
         if not d:
@@ -270,7 +272,7 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # --- DETECT missing coverage ---
+    # --- Detect missing coverage ---
     missing_by_dept = {}
     for dept_name, dept in departments.items():
         scheduled_dates = {s.date for s in Schedule.query.filter_by(department_id=dept.id).all()}
@@ -287,19 +289,21 @@ def generate_schedule():
         q = rot[dept_name]
 
         for sat in missing_dates:
-            # Compute monthly index and Spec Ops group
+            # Compute week info
             month_sats = by_month[(sat.year, sat.month)]
             idx_in_month = month_sats.index(sat) + 1
             week_num = all_sats.index(sat) + 1
             group_for_week = ((week_num - 1) % 4) + 1
 
-            # Department-specific rule logic
+            # === DEPARTMENT RULES ===
             if dept_name == DEPT_SPEC_OPS:
+                # Spec Ops → 4 rotating groups
                 group = spec_ops_groups.get(group_for_week, [])
                 for emp in group:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
 
             elif dept_name == DEPT_CAR:
+                # Corey always works, one rotating partner
                 used_ids = set()
                 if corey_emp:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=corey_emp.id, override=False))
@@ -308,7 +312,45 @@ def generate_schedule():
                 if cand and cand.id not in used_ids:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=cand.id, override=False))
 
+            elif dept_name == DEPT_AUTO:
+                # AUTO: ON/OFF alternating pattern
+                emps = sorted(departments[DEPT_AUTO].employees, key=lambda e: e.id)
+                if not emps:
+                    continue
+                cycle_len = 2  # ON, OFF
+                pos = (week_num - 1) % cycle_len
+                if pos == 0:  # ON weeks only
+                    on_index = ((week_num - 1) // 2) % len(emps)
+                    emp = emps[on_index]
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                # pos == 1 → OFF week (blank)
+
+            elif dept_name == DEPT_DAL:
+                # DAL: ON, ON, OFF, OFF cycle
+                emps = sorted(departments[DEPT_DAL].employees, key=lambda e: e.id)
+                if not emps:
+                    continue
+                cycle_len = 4
+                pos = (week_num - 1) % cycle_len
+                if pos in (0, 1):  # ON weeks
+                    emp = emps[pos % len(emps)]
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                # pos in (2,3) → OFF weeks (blank)
+
+            elif dept_name == DEPT_COLDEN:
+                # COL/DEN: ON, ON, ON, OFF cycle
+                emps = sorted(departments[DEPT_COLDEN].employees, key=lambda e: e.id)
+                if not emps:
+                    continue
+                cycle_len = 4
+                pos = (week_num - 1) % cycle_len
+                if pos in (0, 1, 2):  # ON weeks
+                    emp = emps[pos % len(emps)]
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                # pos == 3 → OFF week (blank)
+
             elif dept_name == DEPT_SHOP:
+                # SHOP: standard rotation + Tommy joins Edwin
                 edwin_exact = next((e for e in departments[DEPT_SHOP].employees if e.name.strip() == "Edwin"), None)
                 tommy = next((e for e in departments[DEPT_SHOP].employees if e.name.lower().startswith("tommy")), None)
                 emp = next_from_deque(q)
@@ -320,7 +362,9 @@ def generate_schedule():
                         ).first()
                         if not exists:
                             db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
+
             else:
+                # Default 1-per-week rotation
                 emp = next_from_deque(q)
                 if emp:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
