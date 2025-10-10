@@ -244,15 +244,11 @@ def generate_schedule():
         emps = list(d.employees)
 
         # SHOP fix: replace Tommy with Edwin
+# SHOP pairing: Tommy works whenever Edwin (exact name) works
         if dept_name == DEPT_SHOP:
-            edwin = next((e for e in emps if e.name.lower().startswith("edwin")), None)
-            new_emps = []
-            for e in emps:
-                if e.name.lower().startswith("tommy") and edwin:
-                    new_emps.append(edwin)  # Tommy → Edwin
-                else:
-                    new_emps.append(e)
-            emps = new_emps
+            edwin_exact = next((e for e in emps if e.name.strip() == "Edwin"), None)
+            tommy = next((e for e in emps if e.name.lower().startswith("tommy")), None)
+
 
         return deque(sorted(emps, key=lambda e: e.id))
 
@@ -336,6 +332,14 @@ def generate_schedule():
                     emp = next_from_deque(q)
                     if emp and not any(r.employee_id == emp.id for r in locked):
                         db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                        
+                        # If this is the Shop department and Edwin (exact) works, add Tommy too
+                        if dept_name == DEPT_SHOP and emp.name.strip() == "Edwin" and tommy:
+                            # Only add Tommy if not already scheduled
+                            already = Schedule.query.filter_by(date=sat, department_id=dept.id, employee_id=tommy.id).first()
+                            if not already:
+                                db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
+
 
     db.session.commit()
     return jsonify({"message": f"Generated schedule from {start} to {end}."})
