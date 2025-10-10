@@ -346,9 +346,9 @@ def import_schedule():
 
     Rules:
       - Accepts MM/DD/YYYY, MM-DD-YYYY, or YYYY-MM-DD
-      - Always keeps only ONE employee per (department, date)
-      - Last occurrence in the CSV wins
-      - Imports all rows (no skipping due to duplicates)
+      - Allows multiple employees per (department, date) for Spec Ops, CAR, COL/DEN
+      - For all other departments, only one employee per (department, date)
+      - Replaces only non-override rows
     """
     import csv
     from werkzeug.utils import secure_filename
@@ -365,13 +365,15 @@ def import_schedule():
     reader = csv.DictReader(file.stream.read().decode("utf-8").splitlines())
     imported, skipped = 0, []
 
+    multi_allowed = {DEPT_SPEC_OPS, DEPT_CAR, DEPT_COLDEN}  # ✅ these can have multiple employees per date
+
     for row in reader:
         try:
             raw_date = row["date"].strip()
             dept_name = row["department"].strip()
             emp_name = row["employee"].strip()
 
-            # Flexible date parsing (MM/DD/YYYY or YYYY-MM-DD)
+            # Parse flexible date
             try:
                 d = parser.parse(raw_date, dayfirst=False).date()
             except Exception:
@@ -391,10 +393,16 @@ def import_schedule():
                 skipped.append(f"Emp not found: {emp_name} ({d}, {dept_name})")
                 continue
 
-            # Remove all non-override entries for this department and date
-            Schedule.query.filter_by(date=d, department_id=dept.id, override=False).delete()
+            # For single-employee departments, replace any existing one
+            if dept.name not in multi_allowed:
+                Schedule.query.filter_by(date=d, department_id=dept.id, override=False).delete()
 
-            # Add the new row (last one in CSV wins if duplicates exist)
+            # For multi-employee departments, avoid duplicates of same person
+            else:
+                exists = Schedule.query.filter_by(date=d, department_id=dept.id, employee_id=emp.id).first()
+                if exists:
+                    continue
+
             db.session.add(Schedule(
                 date=d,
                 department_id=dept.id,
@@ -408,9 +416,10 @@ def import_schedule():
 
     db.session.commit()
     return jsonify({
-        "message": f"Imported {imported} rows (duplicates replaced per department/date)",
+        "message": f"Imported {imported} rows",
         "skipped": skipped
     })
+
 
 
 
