@@ -210,16 +210,15 @@ def list_holidays():
 def generate_schedule():
     """
     Generate or repair schedule:
-      - Repairs only missing or new employee schedules.
-      - Regenerates only future dates (from coming Saturday).
-      - Removes duplicate future entries before regenerating.
-      - Skips past weeks.
-      - Respects department-specific rules (Spec Ops groups, Auto/DAL/COL-DEN custom cycles, Corey rule, Tommy–Edwin pairing, etc.)
-      - Ensures rotation continues based on who worked last.
+      - Repairs only missing or uncovered Saturdays.
+      - Handles new or removed employees gracefully.
+      - Preserves past schedules.
+      - Only regenerates missing/uncovered future dates.
+      - Respects department-specific rules and rotation continuity.
     """
     import json
     from datetime import date
-    from collections import deque
+    from collections import deque, defaultdict
     from pathlib import Path
 
     body = request.get_json(silent=True) or {}
@@ -241,6 +240,7 @@ def generate_schedule():
     holiday_set = {h.date for h in Holiday.query.all()}
     all_sats = [d for d in saturdays_between(start, end) if d not in holiday_set]
     by_month = build_month_saturdays(all_sats)
+    today = date.today()
 
     departments = {d.name: d for d in Department.query.all()}
 
@@ -258,7 +258,8 @@ def generate_schedule():
         g: sorted(
             [e for e in departments.get(DEPT_SPEC_OPS, Department(name="")).employees if e.group_num == g],
             key=lambda e: e.id
-        ) for g in (1, 2, 3, 4)
+        )
+        for g in (1, 2, 3, 4)
     }
 
     # --- CAR: Corey always works ---
@@ -274,70 +275,58 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # --- Detect missing coverage or new employees ---
+    # --- Detect missing or uncovered Saturdays ---
     missing_by_dept = {}
-    today = date.today()
 
     for dept_name, dept in departments.items():
         all_schedules = Schedule.query.filter_by(department_id=dept.id).all()
-        scheduled_dates = {s.date for s in all_schedules}
-        missing_dates = [d for d in all_sats if d not in scheduled_dates and d >= today]
 
-        # Detect employees who exist in DB but have no future assignments
-        all_emp_ids = {e.id for e in dept.employees}
-        future_scheduled_emp_ids = {
-            s.employee_id for s in all_schedules if s.date >= today
-        }
-        unscheduled_emps = all_emp_ids - future_scheduled_emp_ids
+        # build coverage map
+        dates_with_emps = defaultdict(set)
+        for s in all_schedules:
+            if s.date >= today:
+                dates_with_emps[s.date].add(s.employee_id)
 
-        # Case 1: Missing Saturdays → repair as usual
-        # Case 2: New employees with no future shifts → schedule from today onwards
-        if missing_dates or unscheduled_emps:
-            if missing_dates:
-                missing_by_dept[dept_name] = missing_dates
-            else:
-                # If all dates filled but new people added, regenerate future dates for that dept
-                future_sats = [d for d in all_sats if d >= today]
-                missing_by_dept[dept_name] = future_sats
+        missing_dates = []
+        for sat in all_sats:
+            if sat < today:
+                continue
+            # Missing if: no entry OR empty coverage (employee deleted)
+            if sat not in dates_with_emps or len(dates_with_emps[sat]) == 0:
+                missing_dates.append(sat)
+
+        if missing_dates:
+            missing_by_dept[dept_name] = missing_dates
 
     if not missing_by_dept:
         return jsonify({"message": "✅ Schedule is complete. No repair needed."})
 
-    # --- MAIN LOOP (only for missing departments) ---
+    # --- MAIN LOOP (repair only missing dates) ---
     for dept_name, missing_dates in missing_by_dept.items():
         dept = departments[dept_name]
         q = rot[dept_name]
         coming_sat = coming_saturday(date.today())
 
-        # 🧭 Align rotation with whoever worked last
-        last_saturday_row = (
+        # 🧭 Align rotation to whoever worked last (fairness)
+        last_row = (
             Schedule.query.filter(
                 Schedule.department_id == dept.id,
                 Schedule.date < coming_sat
             ).order_by(Schedule.date.desc()).first()
         )
-        if last_saturday_row:
-            last_saturday = last_saturday_row.date
+        if last_row:
+            last_saturday = last_row.date
             last_emp_rows = Schedule.query.filter_by(
                 department_id=dept.id, date=last_saturday
             ).all()
-            if last_emp_rows:
-                # For single-employee-per-week departments: skip the last person
-                if len(last_emp_rows) == 1:
-                    last_emp_id = last_emp_rows[0].employee_id
-                    if q and any(e.id == last_emp_id for e in q):
-                        while q[0].id != last_emp_id:
-                            q.rotate(-1)
-                        q.rotate(-1)  # move past last person
+            if last_emp_rows and len(last_emp_rows) == 1:
+                last_emp_id = last_emp_rows[0].employee_id
+                if q and any(e.id == last_emp_id for e in q):
+                    while q[0].id != last_emp_id:
+                        q.rotate(-1)
+                    q.rotate(-1)
 
-        # 🧹 Clean up future schedules for this department
-        Schedule.query.filter(
-            Schedule.department_id == dept.id,
-            Schedule.date >= coming_sat,
-            Schedule.override == False
-        ).delete()
-
-        # 🧱 Rebuild the schedule for missing/future dates
+        # 🧱 Rebuild missing/uncovered only
         for sat in missing_dates:
             month_sats = by_month[(sat.year, sat.month)]
             idx_in_month = month_sats.index(sat) + 1
@@ -410,14 +399,10 @@ def generate_schedule():
 
     db.session.commit()
     return jsonify({
-        "message": "🛠️ Schedule repaired and regenerated for future dates.",
+        "message": "🧩 Schedule repaired only where coverage was missing.",
         "fixed_departments": list(missing_by_dept.keys()),
         "details": {k: [d.isoformat() for d in v] for k, v in missing_by_dept.items()}
     })
-
-
-
-
 
 import csv
 from werkzeug.utils import secure_filename
