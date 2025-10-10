@@ -701,6 +701,71 @@ def export_excel():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
+# ---------- Edit Department Name ----------
+@app.route("/departments/edit_name", methods=["POST"])
+def edit_department_name():
+    """
+    Rename a department safely.
+    Payload (JSON or form):
+      { "old_name": "Shop", "new_name": "Retail Shop" }
+    """
+    data = request.get_json(silent=True) or request.form.to_dict()
+    old_name = data.get("old_name", "").strip()
+    new_name = data.get("new_name", "").strip()
+
+    if not old_name or not new_name:
+        return jsonify({"error": "Both old_name and new_name are required."}), 400
+
+    dept = Department.query.filter(Department.name.ilike(old_name)).first()
+    if not dept:
+        return jsonify({"error": f"Department '{old_name}' not found."}), 404
+
+    # check if name already taken
+    exists = Department.query.filter(Department.name.ilike(new_name)).first()
+    if exists and exists.id != dept.id:
+        return jsonify({"error": f"A department named '{new_name}' already exists."}), 400
+
+    dept.name = new_name
+    db.session.commit()
+    return jsonify({"message": f"Department renamed from '{old_name}' to '{new_name}'."}), 200
+
+
+# ---------- Edit Employee Name ----------
+@app.route("/employees/edit_name", methods=["POST"])
+def edit_employee_name():
+    """
+    Rename an employee safely.
+    Payload (JSON or form):
+      { "old_name": "Aayush", "new_name": "Aayush Patil" }
+    """
+    data = request.get_json(silent=True) or request.form.to_dict()
+    old_name = data.get("old_name", "").strip()
+    new_name = data.get("new_name", "").strip()
+
+    if not old_name or not new_name:
+        return jsonify({"error": "Both old_name and new_name are required."}), 400
+
+    emp = Employee.query.filter(db.func.lower(Employee.name) == old_name.lower()).first()
+    if not emp:
+        return jsonify({"error": f"Employee '{old_name}' not found."}), 404
+
+    # check if another employee already has this name (case-insensitive)
+    exists = Employee.query.filter(
+        db.func.lower(Employee.name) == new_name.lower(),
+        Employee.department_id == emp.department_id,
+        Employee.id != emp.id
+    ).first()
+    if exists:
+        return jsonify({"error": f"Employee '{new_name}' already exists in this department."}), 400
+
+    emp.name = new_name
+    db.session.commit()
+    return jsonify({
+        "message": f"Employee renamed from '{old_name}' to '{new_name}' in department '{emp.department.name}'.",
+        "id": emp.id,
+        "department": emp.department.name
+    }), 200
+
 
 # ---------- UI ----------
 @app.route("/ui")

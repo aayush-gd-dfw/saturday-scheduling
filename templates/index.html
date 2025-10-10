@@ -87,6 +87,23 @@
             </form>
             <h6>Existing Departments</h6>
             <ul class="list-group" id="deptList"></ul>
+
+            <!-- Rename Department -->
+            <div class="mt-3">
+              <h6>Rename Department</h6>
+              <form id="renameDeptForm" class="row g-2">
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="oldDeptName" placeholder="Old Name" required>
+                </div>
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="newDeptName" placeholder="New Name" required>
+                </div>
+                <div class="col-sm-2 d-grid">
+                  <button class="btn btn-outline-primary" type="submit">Rename</button>
+                </div>
+              </form>
+            </div>
+
           </div>
         </div>
 
@@ -110,6 +127,23 @@
             </form>
             <h6 class="mt-3">Existing Employees</h6>
             <ul class="list-group" id="empList"></ul>
+
+            <!-- Rename Employee -->
+            <div class="mt-3">
+              <h6>Rename Employee</h6>
+              <form id="renameEmpForm" class="row g-2">
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="oldEmpName" placeholder="Old Name" required>
+                </div>
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="newEmpName" placeholder="New Name" required>
+                </div>
+                <div class="col-sm-2 d-grid">
+                  <button class="btn btn-outline-success" type="submit">Rename</button>
+                </div>
+              </form>
+            </div>
+
           </div>
         </div>
       </div>
@@ -325,6 +359,42 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 document.getElementById("calendar-tab").addEventListener("click", loadSchedule);
 document.getElementById("table-tab").addEventListener("click", loadSchedule);
+// ----- Rename Department -----
+document.getElementById("renameDeptForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const oldName = document.getElementById("oldDeptName").value.trim();
+  const newName = document.getElementById("newDeptName").value.trim();
+  const res = await fetch(`${API_BASE}/departments/edit_name`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({old_name: oldName, new_name: newName})
+  });
+  const j = await res.json();
+  alert(j.message || j.error);
+  if (res.ok) {
+    e.target.reset();
+    loadDepartments();
+  }
+});
+
+// ----- Rename Employee -----
+document.getElementById("renameEmpForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const oldName = document.getElementById("oldEmpName").value.trim();
+  const newName = document.getElementById("newEmpName").value.trim();
+  const res = await fetch(`${API_BASE}/employees/edit_name`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({old_name: oldName, new_name: newName})
+  });
+  const j = await res.json();
+  alert(j.message || j.error);
+  if (res.ok) {
+    e.target.reset();
+    loadEmployees();
+  }
+});
+
 document.getElementById("holidays-tab").addEventListener("click", loadHolidays);
 </script>
 </body>
