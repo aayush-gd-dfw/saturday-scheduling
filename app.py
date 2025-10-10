@@ -407,6 +407,44 @@ def generate_schedule():
     })
 
 
+@app.route("/api/next_saturday_assignments", methods=["GET"])
+def next_saturday_assignments():
+    """
+    Returns the employees working on the coming Saturday for:
+    - Dispatch (MOD)
+    - CSR
+    - Spec Ops office
+    """
+    today = date.today()
+    sat = coming_saturday(today)
+
+    # Fetch scheduled employees for key departments
+    results = {}
+    key_depts = {
+        "mod": DEPT_DISPATCH,
+        "csr": DEPT_CSR,
+        "spec_ops": DEPT_SPEC_OPS_OFFICE
+    }
+
+    for key, dept_name in key_depts.items():
+        dept = Department.query.filter(Department.name.ilike(dept_name)).first()
+        if not dept:
+            results[key] = None
+            continue
+        sched = (
+            Schedule.query
+            .filter_by(department_id=dept.id, date=sat)
+            .join(Employee)
+            .first()
+        )
+        results[key] = sched.employee.name if sched else None
+
+    return jsonify({
+        "saturday": sat.isoformat(),
+        "dispatch_mod": results["mod"],
+        "csr": results["csr"],
+        "spec_ops": results["spec_ops"]
+    })
 
 
 
