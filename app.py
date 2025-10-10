@@ -339,7 +339,7 @@ def generate_schedule():
                         db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
                         
                         # If this is the Shop department and Edwin (exact) works, add Tommy too
-                        if dept_name == DEPT_SHOP and emp.name.strip() == "Edwin" and tommy:
+                        if dept_name == DEPT_SHOP and emp.name.strip() == "Edwin" and "tommy":
                             # Only add Tommy if not already scheduled
                             already = Schedule.query.filter_by(date=sat, department_id=dept.id, employee_id=tommy.id).first()
                             if not already:
