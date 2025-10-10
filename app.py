@@ -220,7 +220,7 @@ def generate_schedule():
         * CAR → Corey every week + 2 others
         * COL/DEN → skip 4th Saturday
         * Spec Ops → all members of one group per week
-        * Shop → Tommy is mapped to Edwin
+        * Shop → Tommy is NOT in rotation; if 'Edwin' (exact) works, Tommy also works that Saturday
     """
     body = request.get_json(silent=True) or {}
     try:
@@ -235,31 +235,29 @@ def generate_schedule():
     if start > end:
         return jsonify({"message": f"No Saturdays remaining in {year}."})
 
+    # Gather data
     holiday_set = {h.date for h in Holiday.query.all()}
     all_sats = [d for d in saturdays_between(start, end) if d not in holiday_set]
     by_month = build_month_saturdays(all_sats)
-
     departments = {d.name: d for d in Department.query.all()}
 
+    # Identify special Shop members
     edwin_exact, tommy = None, None
     if DEPT_SHOP in departments:
         shop_emps = list(departments[DEPT_SHOP].employees)
         edwin_exact = next((e for e in shop_emps if e.name.strip() == "Edwin"), None)
         tommy = next((e for e in shop_emps if e.name.lower().startswith("tommy")), None)
 
-    # build employee rotations
+    # Helper to build rotation per dept
     def dept_employees(dept_name: str):
         d = departments.get(dept_name)
         if not d:
             return deque()
         emps = list(d.employees)
 
-        # SHOP fix: replace Tommy with Edwin
-# SHOP pairing: Tommy works whenever Edwin (exact name) works
-        if dept_name == DEPT_SHOP:
-            edwin_exact = next((e for e in emps if e.name.strip() == "Edwin"), None)
-            tommy = next((e for e in emps if e.name.lower().startswith("tommy")), None)
-
+        # For Shop: remove Tommy from rotation (he only follows Edwin)
+        if dept_name == DEPT_SHOP and tommy:
+            emps = [e for e in emps if e.id != tommy.id]
 
         return deque(sorted(emps, key=lambda e: e.id))
 
@@ -281,9 +279,12 @@ def generate_schedule():
             if e.name.strip().lower().startswith("corey"):
                 corey_emp = e
                 break
-        rot[DEPT_CAR] = deque(sorted([e for e in car_emps_all if not (corey_emp and e.id == corey_emp.id)], key=lambda e: e.id))
+        rot[DEPT_CAR] = deque(sorted(
+            [e for e in car_emps_all if not (corey_emp and e.id == corey_emp.id)],
+            key=lambda e: e.id
+        ))
 
-    # main loop
+    # ---------- Main scheduling loop ----------
     week_counter = 0
     for sat in all_sats:
         week_counter += 1
@@ -300,7 +301,7 @@ def generate_schedule():
         if DEPT_DAL in departments and idx_in_month >= 3:
             req[DEPT_DAL] = 1
         if DEPT_CAR in departments:
-            req[DEPT_CAR] = 2  # Corey + 1 others
+            req[DEPT_CAR] = 2
         if DEPT_COLDEN in departments and idx_in_month != 4:
             req[DEPT_COLDEN] = 1
         if DEPT_SPEC_OPS in departments:
@@ -329,7 +330,7 @@ def generate_schedule():
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=corey_emp.id, override=False))
                     used_ids.add(corey_emp.id)
                 q = rot[DEPT_CAR]
-                needed = 1  # 2 others besides Corey
+                needed = 1
                 while needed > 0 and q:
                     cand = next_from_deque(q)
                     if cand and cand.id not in used_ids:
@@ -343,17 +344,20 @@ def generate_schedule():
                     emp = next_from_deque(q)
                     if emp and not any(r.employee_id == emp.id for r in locked):
                         db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                        
-                        # If this is the Shop department and Edwin (exact) works, add Tommy too
-                        if dept_name == DEPT_SHOP and emp.name.strip() == "Edwin" and "tommy":
-                            # Only add Tommy if not already scheduled
-                            already = Schedule.query.filter_by(date=sat, department_id=dept.id, employee_id=tommy.id).first()
-                            if not already:
-                                db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
 
+                        # 🧩 Shop rule: if Edwin (exact) works → add Tommy too
+                        if dept_name == DEPT_SHOP and edwin_exact and tommy and emp.id == edwin_exact.id:
+                            already = Schedule.query.filter_by(
+                                date=sat, department_id=dept.id, employee_id=tommy.id
+                            ).first()
+                            if not already:
+                                db.session.add(Schedule(
+                                    date=sat, department_id=dept.id, employee_id=tommy.id, override=False
+                                ))
 
     db.session.commit()
     return jsonify({"message": f"Generated schedule from {start} to {end}."})
+
 
 import csv
 from werkzeug.utils import secure_filename
