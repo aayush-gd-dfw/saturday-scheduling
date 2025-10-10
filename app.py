@@ -273,15 +273,35 @@ def generate_schedule():
         ))
 
     # --- Detect missing coverage ---
+# --- Detect missing coverage or new employees ---
     missing_by_dept = {}
+    today = date.today()
+
     for dept_name, dept in departments.items():
-        scheduled_dates = {s.date for s in Schedule.query.filter_by(department_id=dept.id).all()}
-        missing_dates = [d for d in all_sats if d not in scheduled_dates]
-        if missing_dates:
-            missing_by_dept[dept_name] = missing_dates
+        all_schedules = Schedule.query.filter_by(department_id=dept.id).all()
+        scheduled_dates = {s.date for s in all_schedules}
+        missing_dates = [d for d in all_sats if d not in scheduled_dates and d >= today]
+
+        # Detect employees who exist in DB but have no future assignments
+        all_emp_ids = {e.id for e in dept.employees}
+        future_scheduled_emp_ids = {
+            s.employee_id for s in all_schedules if s.date >= today
+        }
+        unscheduled_emps = all_emp_ids - future_scheduled_emp_ids
+
+        # Case 1: Missing Saturdays → repair as usual
+        # Case 2: New employees with no future shifts → schedule from today onwards
+        if missing_dates or unscheduled_emps:
+            if missing_dates:
+                missing_by_dept[dept_name] = missing_dates
+            else:
+                # If all dates filled but new people added, regenerate future dates for that dept
+                future_sats = [d for d in all_sats if d >= today]
+                missing_by_dept[dept_name] = future_sats
 
     if not missing_by_dept:
         return jsonify({"message": "✅ Schedule is complete. No repair needed."})
+
 
     # --- MAIN LOOP (only for missing departments) ---
     for dept_name, missing_dates in missing_by_dept.items():
