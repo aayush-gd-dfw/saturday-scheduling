@@ -344,33 +344,6 @@ def generate_schedule():
     db.session.commit()
     return jsonify({"message": "✅ Schedule updated for new/removal changes. Existing assignments preserved."})
 
-@app.route("/employees/remove_by_name", methods=["POST"])
-def remove_employee_by_name():
-    """
-    Remove employee by name (case-insensitive).
-    Accepts JSON or form: { "name": "Aayush" } OR name=Aayush
-    """
-    data = request.get_json(silent=True) or request.form.to_dict() or {}
-
-    name = data.get("name", "").strip()
-    if not name:
-        return jsonify({"error": "Name is required"}), 400
-
-    # find employee
-    emp = Employee.query.filter(
-        db.func.lower(Employee.name) == name.lower()
-    ).first()
-
-    if not emp:
-        return jsonify({"error": f"No employee found with name {name}"}), 404
-
-    # delete employee + related schedules
-    Schedule.query.filter_by(employee_id=emp.id).delete()
-    db.session.delete(emp)
-    db.session.commit()
-
-    return jsonify({"message": f"Removed {name} successfully"})
-
 
 
 
