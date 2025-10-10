@@ -210,33 +210,23 @@ def list_holidays():
 def generate_schedule():
     """
     Generate or repair schedule:
-      - Repairs only missing or uncovered Saturdays.
-      - Handles new or removed employees gracefully.
+      - Repairs missing or uncovered Saturdays.
+      - Detects new employees and starts including them from the coming Saturday.
       - Preserves past schedules.
-      - Only regenerates missing/uncovered future dates.
-      - Respects department-specific rules and rotation continuity.
+      - Regenerates only affected departments.
+      - Handles all custom department rules.
     """
-    import json
     from datetime import date
     from collections import deque, defaultdict
-    from pathlib import Path
 
     body = request.get_json(silent=True) or {}
-
-    # --- Safe year parsing ---
-    try:
-        year = int(body.get("year", date.today().year))
-        if year < 1:
-            raise ValueError
-    except Exception:
-        year = date.today().year
+    year = int(body.get("year", date.today().year))
 
     start = coming_saturday(date.today())
     end = last_saturday_of_year(year)
     if start > end:
         return jsonify({"message": f"No Saturdays remaining in {year}."})
 
-    # --- Collect holidays and Saturdays ---
     holiday_set = {h.date for h in Holiday.query.all()}
     all_sats = [d for d in saturdays_between(start, end) if d not in holiday_set]
     by_month = build_month_saturdays(all_sats)
@@ -244,12 +234,10 @@ def generate_schedule():
 
     departments = {d.name: d for d in Department.query.all()}
 
-    # --- Helper: prepare rotation deque ---
+    # --- rotation helper ---
     def dept_employees(dept_name: str):
         d = departments.get(dept_name)
-        if not d:
-            return deque()
-        return deque(sorted(list(d.employees), key=lambda e: e.id))
+        return deque(sorted(list(d.employees), key=lambda e: e.id)) if d else deque()
 
     rot = {name: dept_employees(name) for name in departments.keys()}
 
@@ -275,39 +263,50 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # --- Detect missing or uncovered Saturdays ---
+    # --- detect departments needing update ---
     missing_by_dept = {}
 
     for dept_name, dept in departments.items():
         all_schedules = Schedule.query.filter_by(department_id=dept.id).all()
 
-        # build coverage map
+        # --- build coverage map ---
         dates_with_emps = defaultdict(set)
         for s in all_schedules:
             if s.date >= today:
                 dates_with_emps[s.date].add(s.employee_id)
 
+        # --- detect missing or uncovered dates ---
         missing_dates = []
         for sat in all_sats:
             if sat < today:
                 continue
-            # Missing if: no entry OR empty coverage (employee deleted)
             if sat not in dates_with_emps or len(dates_with_emps[sat]) == 0:
                 missing_dates.append(sat)
 
-        if missing_dates:
-            missing_by_dept[dept_name] = missing_dates
+        # --- detect new employees not yet scheduled in future ---
+        emp_ids = {e.id for e in dept.employees}
+        future_emp_ids = {s.employee_id for s in all_schedules if s.date >= today}
+        unscheduled_emps = emp_ids - future_emp_ids
+
+        if missing_dates or unscheduled_emps:
+            # If there are missing dates, repair those only
+            if missing_dates:
+                missing_by_dept[dept_name] = missing_dates
+            # If all dates are covered but new people exist, rebuild future dates
+            elif unscheduled_emps:
+                future_sats = [d for d in all_sats if d >= start]
+                missing_by_dept[dept_name] = future_sats
 
     if not missing_by_dept:
         return jsonify({"message": "✅ Schedule is complete. No repair needed."})
 
-    # --- MAIN LOOP (repair only missing dates) ---
+    # --- main loop ---
     for dept_name, missing_dates in missing_by_dept.items():
         dept = departments[dept_name]
         q = rot[dept_name]
         coming_sat = coming_saturday(date.today())
 
-        # 🧭 Align rotation to whoever worked last (fairness)
+        # --- fair rotation: align deque to whoever worked last ---
         last_row = (
             Schedule.query.filter(
                 Schedule.department_id == dept.id,
@@ -315,9 +314,8 @@ def generate_schedule():
             ).order_by(Schedule.date.desc()).first()
         )
         if last_row:
-            last_saturday = last_row.date
             last_emp_rows = Schedule.query.filter_by(
-                department_id=dept.id, date=last_saturday
+                department_id=dept.id, date=last_row.date
             ).all()
             if last_emp_rows and len(last_emp_rows) == 1:
                 last_emp_id = last_emp_rows[0].employee_id
@@ -326,7 +324,14 @@ def generate_schedule():
                         q.rotate(-1)
                     q.rotate(-1)
 
-        # 🧱 Rebuild missing/uncovered only
+        # --- delete only missing/uncovered dates (no mass deletion) ---
+        Schedule.query.filter(
+            Schedule.department_id == dept.id,
+            Schedule.date.in_(missing_dates),
+            Schedule.override == False
+        ).delete(synchronize_session=False)
+
+        # --- rebuild just for missing/uncovered/new-needed dates ---
         for sat in missing_dates:
             month_sats = by_month[(sat.year, sat.month)]
             idx_in_month = month_sats.index(sat) + 1
@@ -352,7 +357,7 @@ def generate_schedule():
                 emps = sorted(departments[DEPT_AUTO].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                cycle_len = 2  # ON, OFF
+                cycle_len = 2
                 pos = (week_num - 1) % cycle_len
                 if pos == 0:
                     on_index = ((week_num - 1) // 2) % len(emps)
@@ -363,7 +368,7 @@ def generate_schedule():
                 emps = sorted(departments[DEPT_DAL].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                cycle_len = 4  # ON, ON, OFF, OFF
+                cycle_len = 4
                 pos = (week_num - 1) % cycle_len
                 if pos in (0, 1):
                     emp = emps[pos % len(emps)]
@@ -373,7 +378,7 @@ def generate_schedule():
                 emps = sorted(departments[DEPT_COLDEN].employees, key=lambda e: e.id)
                 if not emps:
                     continue
-                cycle_len = 4  # ON, ON, ON, OFF
+                cycle_len = 4
                 pos = (week_num - 1) % cycle_len
                 if pos in (0, 1, 2):
                     emp = emps[pos % len(emps)]
@@ -399,10 +404,11 @@ def generate_schedule():
 
     db.session.commit()
     return jsonify({
-        "message": "🧩 Schedule repaired only where coverage was missing.",
-        "fixed_departments": list(missing_by_dept.keys()),
+        "message": "🔁 Schedule updated — missing, removed, and new employees handled.",
+        "affected_departments": list(missing_by_dept.keys()),
         "details": {k: [d.isoformat() for d in v] for k, v in missing_by_dept.items()}
     })
+
 
 import csv
 from werkzeug.utils import secure_filename
