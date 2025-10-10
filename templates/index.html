@@ -144,6 +144,23 @@
               </form>
             </div>
 
+
+            <!-- Rename Employee -->
+            <div class="mt-3">
+              <h6>Rename Employee</h6>
+              <form id="renameEmpForm" class="row g-2">
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="oldEmpName" placeholder="Old Name" required>
+                </div>
+                <div class="col-sm-5">
+                  <input type="text" class="form-control" id="newEmpName" placeholder="New Name" required>
+                </div>
+                <div class="col-sm-2 d-grid">
+                  <button class="btn btn-outline-success" type="submit">Rename</button>
+                </div>
+              </form>
+            </div>
+
           </div>
         </div>
       </div>
@@ -243,11 +260,25 @@ document.getElementById("deptForm").addEventListener("submit", async e => {
 async function loadEmployees() {
   const res = await fetch(`${API_BASE}/employees`);
   const data = await res.json();
-  document.getElementById("empList").innerHTML =
-    data.map(e => `<li class="list-group-item">
-      ${e.id} — ${e.name} (Dept ${e.department_id}${e.group_num ? `, Group ${e.group_num}` : ""})
-    </li>`).join("");
+  const empList = document.getElementById("empList");
+  empList.innerHTML = "";
+
+  data.forEach(e => {
+    const li = document.createElement("li");
+    li.className = "list-group-item d-flex justify-content-between align-items-center";
+
+    li.innerHTML = `
+      <span>
+        <strong>${e.name}</strong> 
+        <small class="text-muted">(Dept ${e.department_id}${e.group_num ? `, Group ${e.group_num}` : ""})</small>
+      </span>
+      <button class="btn btn-sm btn-outline-danger" onclick="removeEmployee('${e.name}')">❌</button>
+    `;
+
+    empList.appendChild(li);
+  });
 }
+
 document.getElementById("empForm").addEventListener("submit", async e => {
   e.preventDefault();
   await fetch(`${API_BASE}/employees`, {
@@ -262,6 +293,20 @@ document.getElementById("empForm").addEventListener("submit", async e => {
   e.target.reset();
   loadEmployees();
 });
+// ----- Remove Employee -----
+async function removeEmployee(name) {
+  if (!confirm(`Are you sure you want to remove ${name}? This will delete all their future schedules.`)) return;
+
+  const res = await fetch(`${API_BASE}/employees/remove_by_name`, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ name })
+  });
+
+  const j = await res.json();
+  alert(j.message || j.error || "Error removing employee");
+  if (res.ok) loadEmployees();
+}
 
 // ----- Holidays -----
 async function loadHolidays() {
