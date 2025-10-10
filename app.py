@@ -209,19 +209,11 @@ def list_holidays():
 @app.route("/schedule/generate", methods=["POST"])
 def generate_schedule():
     """
-    Generate schedule safely:
-      - From coming Saturday → last Saturday of given year
-      - Skips holidays
-      - Preserves overrides and existing schedules
-      - Only regenerates changed or incomplete departments
-      - Rules applied:
-          * Dispatch, CSR, Spec Ops office, ARL, Shop → 1 per week
-          * Auto → odd Saturdays only
-          * DAL → starts 3rd Saturday onward
-          * CAR → Corey every week + 1 others
-          * COL/DEN → skip 4th Saturday
-          * Spec Ops → 1 full group per week
-          * Shop → Tommy always paired with Edwin (exact name only)
+    Generate or repair schedule:
+      - If everything is fine, does nothing.
+      - If any department has missing Saturdays, regenerates only that department's missing weeks.
+      - Keeps all other departments untouched.
+      - Includes Tommy–Edwin pairing, Spec Ops rules, etc.
     """
     import json
     from pathlib import Path
@@ -257,7 +249,7 @@ def generate_schedule():
 
     rot = {name: dept_employees(name) for name in departments.keys()}
 
-    # --- Spec Ops grouping ---
+    # --- Spec Ops groups ---
     spec_ops_groups = {
         g: sorted(
             [e for e in departments.get(DEPT_SPEC_OPS, Department(name="")).employees if e.group_num == g],
@@ -278,130 +270,68 @@ def generate_schedule():
             key=lambda e: e.id
         ))
 
-    # --- SMART REGEN LOGIC ---
-    snapshot_file = Path("last_snapshot.json")
-
-    current_snapshot = {
-        d.name: sorted([e.id for e in d.employees]) for d in Department.query.all()
-    }
-
-    # Load last known snapshot
-    if snapshot_file.exists():
-        with open(snapshot_file, "r") as f:
-            prev_snapshot = json.load(f)
-    else:
-        prev_snapshot = {}
-
-    # Detect which departments changed employees
-    changed_departments = []
-    for dept_name, emp_ids in current_snapshot.items():
-        prev_ids = prev_snapshot.get(dept_name, [])
-        if emp_ids != prev_ids:
-            changed_departments.append(dept_name)
-
-    regenerate_for = set(changed_departments)
-
-    # Also regenerate if coverage is missing for that dept
+    # --- DETECT missing coverage ---
+    missing_by_dept = {}
     for dept_name, dept in departments.items():
         scheduled_dates = {s.date for s in Schedule.query.filter_by(department_id=dept.id).all()}
         missing_dates = [d for d in all_sats if d not in scheduled_dates]
         if missing_dates:
-            regenerate_for.add(dept_name)
+            missing_by_dept[dept_name] = missing_dates
 
-    # Save new snapshot
-    with open(snapshot_file, "w") as f:
-        json.dump(current_snapshot, f, indent=2)
+    if not missing_by_dept:
+        return jsonify({"message": "✅ Schedule is complete. No repair needed."})
 
-    # --- MAIN LOOP ---
-    week_counter = 0
-    for sat in all_sats:
-        week_counter += 1
-        group_for_week = ((week_counter - 1) % 4) + 1
-        month_sats = by_month[(sat.year, sat.month)]
-        idx_in_month = month_sats.index(sat) + 1
+    # --- MAIN LOOP (only for missing departments) ---
+    for dept_name, missing_dates in missing_by_dept.items():
+        dept = departments[dept_name]
+        q = rot[dept_name]
 
-        req: dict[str, int] = {}
-        for name in WEEKLY_ONE:
-            if name in departments:
-                req[name] = 1
-        if DEPT_AUTO in departments and (idx_in_month % 2 == 1):
-            req[DEPT_AUTO] = 1
-        if DEPT_DAL in departments and idx_in_month >= 3:
-            req[DEPT_DAL] = 1
-        if DEPT_CAR in departments:
-            req[DEPT_CAR] = 2  # Corey + one more
-        if DEPT_COLDEN in departments and idx_in_month != 4:
-            req[DEPT_COLDEN] = 1
-        if DEPT_SPEC_OPS in departments:
-            req[DEPT_SPEC_OPS] = len(spec_ops_groups.get(group_for_week, []))
+        for sat in missing_dates:
+            # Compute monthly index and Spec Ops group
+            month_sats = by_month[(sat.year, sat.month)]
+            idx_in_month = month_sats.index(sat) + 1
+            week_num = all_sats.index(sat) + 1
+            group_for_week = ((week_num - 1) % 4) + 1
 
-        # --- Per-department assignment ---
-        for dept_name, slots in req.items():
-            if dept_name not in regenerate_for:
-                continue  # ✅ skip unchanged departments
-
-            dept = departments[dept_name]
-            existing_rows = Schedule.query.filter_by(date=sat, department_id=dept.id).all()
-            locked = [r for r in existing_rows if r.override]
-            for r in existing_rows:
-                if not r.override:
-                    db.session.delete(r)
-            remaining = max(0, slots - len(locked))
-            if remaining == 0:
-                continue
-
-            # --- Spec Ops ---
+            # Department-specific rule logic
             if dept_name == DEPT_SPEC_OPS:
                 group = spec_ops_groups.get(group_for_week, [])
                 for emp in group:
-                    if not any(r.employee_id == emp.id for r in locked):
-                        db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
 
-            # --- CAR (Corey always) ---
             elif dept_name == DEPT_CAR:
-                used_ids = {r.employee_id for r in locked}
-                if corey_emp and corey_emp.id not in used_ids:
+                used_ids = set()
+                if corey_emp:
                     db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=corey_emp.id, override=False))
                     used_ids.add(corey_emp.id)
-                q = rot[DEPT_CAR]
-                needed = 1
-                while needed > 0 and q:
-                    cand = next_from_deque(q)
-                    if cand and cand.id not in used_ids:
-                        db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=cand.id, override=False))
-                        used_ids.add(cand.id)
-                        needed -= 1
+                cand = next_from_deque(q)
+                if cand and cand.id not in used_ids:
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=cand.id, override=False))
 
-            # --- SHOP special rule ---
             elif dept_name == DEPT_SHOP:
-                q = rot[DEPT_SHOP]
                 edwin_exact = next((e for e in departments[DEPT_SHOP].employees if e.name.strip() == "Edwin"), None)
                 tommy = next((e for e in departments[DEPT_SHOP].employees if e.name.lower().startswith("tommy")), None)
-                for _ in range(remaining):
-                    emp = next_from_deque(q)
-                    if emp and not any(r.employee_id == emp.id for r in locked):
-                        db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
-                        # ✅ If Edwin works → also add Tommy
-                        if emp.name.strip() == "Edwin" and tommy:
-                            exists = Schedule.query.filter_by(
-                                date=sat, department_id=dept.id, employee_id=tommy.id
-                            ).first()
-                            if not exists:
-                                db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
-
-            # --- Default departments ---
+                emp = next_from_deque(q)
+                if emp:
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                    if emp.name.strip() == "Edwin" and tommy:
+                        exists = Schedule.query.filter_by(
+                            date=sat, department_id=dept.id, employee_id=tommy.id
+                        ).first()
+                        if not exists:
+                            db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=tommy.id, override=False))
             else:
-                q = rot[dept_name]
-                for _ in range(remaining):
-                    emp = next_from_deque(q)
-                    if emp and not any(r.employee_id == emp.id for r in locked):
-                        db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
+                emp = next_from_deque(q)
+                if emp:
+                    db.session.add(Schedule(date=sat, department_id=dept.id, employee_id=emp.id, override=False))
 
     db.session.commit()
     return jsonify({
-        "message": f"✅ Schedule generated safely for {year}.",
-        "regenerated_departments": sorted(list(regenerate_for))
+        "message": "🛠️ Schedule repaired for missing weeks only.",
+        "fixed_departments": list(missing_by_dept.keys()),
+        "details": {k: [d.isoformat() for d in v] for k, v in missing_by_dept.items()}
     })
+
 
 
 
