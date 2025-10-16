@@ -15,9 +15,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
 
 # ----- constants -----
-DEPT_DISPATCH = "Dispatch (MOD)"
+DEPT_DISPATCH = "MOD"
 DEPT_CSR = "CSR"
-DEPT_SPEC_OPS_OFFICE = "Spec Ops office"
+DEPT_SPEC_OPS_OFFICE = "SO Office"
 DEPT_AUTO = "Auto"
 DEPT_SHOP = "Shop"
 DEPT_DAL = "DAL"
