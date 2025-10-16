@@ -495,6 +495,9 @@ from models import db, Schedule
 from dateutil import parser
 import difflib
 
+@app.route("/calendar")
+def calendar_only():
+    return render_template("calendar.html")
 
 
 @app.route("/swap", methods=["POST"])
