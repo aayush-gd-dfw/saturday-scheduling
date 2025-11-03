@@ -11,6 +11,11 @@ try:
 except Exception:
     # fallback so the retry still works even if SQLAlchemy’s class isn’t available
     OperationalError = Exception
+from sqlalchemy import text
+try:
+    import psycopg2
+except Exception:
+    psycopg2 = None
 
 app = Flask(__name__)
 
@@ -30,13 +35,48 @@ app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
 # Keep connections fresh so idle ones (dropped by provider) are recycled
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_pre_ping": True,   # test connection before use; replace if dead
-    "pool_recycle": 300,     # recycle after 5 min (tune if your DB idles sooner)
-    "pool_size": 5,          # modest pool to avoid hitting connection limits
+    "pool_pre_ping": True,
+    "pool_recycle": 300,
+    "pool_size": 5,
     "max_overflow": 5,
+    # NEW: psycopg2 socket keepalive + ssl
+    "connect_args": {
+        # keep the TCP connection alive so middleboxes don’t drop it
+        "keepalives": 1,
+        "keepalives_idle": 30,      # seconds before starting keepalives
+        "keepalives_interval": 10,  # seconds between probes
+        "keepalives_count": 5,      # try 5 times before giving up
+        # belt & suspenders: sslmode here too (in addition to URL)
+        "sslmode": "require",
+    },
 }
 
+
 db.init_app(app)
+@app.before_request
+def _ensure_live_connection():
+    """
+    Try a trivial query; if the pool hands us a dead socket or connect fails,
+    dispose the engine and retry once so the current request can proceed.
+    """
+    try:
+        db.session.execute(text("SELECT 1"))
+    except Exception as e:
+        # rollback any partial state
+        db.session.rollback()
+        # dispose the whole pool (drops all connections)
+        try:
+            db.engine.dispose()
+        except Exception:
+            pass
+        # retry once
+        try:
+            db.session.execute(text("SELECT 1"))
+        except Exception as e2:
+            # If even the second attempt fails, surface a clean 503.
+            # You can customize this to jsonify a nicer payload if you prefer.
+            from flask import abort
+            abort(503, description="Database temporarily unavailable. Please retry.")
 
 # --- Create tables once with retry/backoff (Flask 3-safe) ---
 def _safe_create_all(max_tries=6):
