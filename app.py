@@ -31,9 +31,29 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 
 db.init_app(app)
 
-# Create tables once at import time (Flask 3-safe)
-with app.app_context():
-    db.create_all()
+# --- Create tables once with retry/backoff (Flask 3-safe) ---
+def _safe_create_all(max_tries=6):
+    # exponential backoff: 1, 2, 4, 8, 16, 30 seconds
+    delays = [1, 2, 4, 8, 16, 30]
+    for i in range(min(max_tries, len(delays))):
+        try:
+            with app.app_context():
+                db.create_all()
+            print("✅ DB init: create_all() succeeded")
+            return
+        except OperationalError as e:
+            print(f"⚠️ DB init failed (try {i+1}): {e}")
+            time.sleep(delays[i])
+    # Don't crash the process—app can connect lazily on first real request
+    print("⏭️ Skipping create_all() after retries; will connect per-request.")
+
+_safe_create_all()
+
+# Optional: log target (sanitized) to confirm sslmode=require made it in
+try:
+    print("DB target:", app.config["SQLALCHEMY_DATABASE_URI"].split("@")[-1])
+except Exception:
+    pass
 
 # ----- constants -----
 DEPT_DISPATCH = "MOD"
