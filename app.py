@@ -4,6 +4,7 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 from flask import Flask, request, jsonify, render_template, send_file
 from models import db, Department, Employee, Schedule, Holiday
+import time
 # add after your other imports
 try:
     from sqlalchemy.exc import OperationalError
