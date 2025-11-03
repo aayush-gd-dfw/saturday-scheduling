@@ -4,103 +4,15 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 from flask import Flask, request, jsonify, render_template, send_file
 from models import db, Department, Employee, Schedule, Holiday
-import time
-# add after your other imports
-try:
-    from sqlalchemy.exc import OperationalError
-except Exception:
-    # fallback so the retry still works even if SQLAlchemy’s class isn’t available
-    OperationalError = Exception
-from sqlalchemy import text
-try:
-    import psycopg2
-except Exception:
-    psycopg2 = None
 
 app = Flask(__name__)
 
-# --- DB config (Render-friendly, single-file patch) ---
-def _db_url():
-    import os
-    url = os.environ.get("DATABASE_URL", "sqlite:///local.db")
-    # SQLAlchemy needs 'postgresql://' (Render/Heroku often gives 'postgres://')
-    url = url.replace("postgres://", "postgresql://")
-    # Enforce TLS so psycopg2 doesn't get dropped mid-handshake
-    if url.startswith("postgresql://") and "sslmode=" not in url:
-        url += ("&" if "?" in url else "?") + "sslmode=require"
-    return url
-
-app.config["SQLALCHEMY_DATABASE_URI"] = _db_url()
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
-# Keep connections fresh so idle ones (dropped by provider) are recycled
-app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
-    "pool_pre_ping": True,
-    "pool_recycle": 300,
-    "pool_size": 5,
-    "max_overflow": 5,
-    # NEW: psycopg2 socket keepalive + ssl
-    "connect_args": {
-        # keep the TCP connection alive so middleboxes don’t drop it
-        "keepalives": 1,
-        "keepalives_idle": 30,      # seconds before starting keepalives
-        "keepalives_interval": 10,  # seconds between probes
-        "keepalives_count": 5,      # try 5 times before giving up
-        # belt & suspenders: sslmode here too (in addition to URL)
-        "sslmode": "require",
-    },
-}
-
-
+# DB config (Render friendly)
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
+    "DATABASE_URL", "sqlite:///local.db"
+).replace("postgres://", "postgresql://")
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db.init_app(app)
-@app.before_request
-def _ensure_live_connection():
-    """
-    Try a trivial query; if the pool hands us a dead socket or connect fails,
-    dispose the engine and retry once so the current request can proceed.
-    """
-    try:
-        db.session.execute(text("SELECT 1"))
-    except Exception as e:
-        # rollback any partial state
-        db.session.rollback()
-        # dispose the whole pool (drops all connections)
-        try:
-            db.engine.dispose()
-        except Exception:
-            pass
-        # retry once
-        try:
-            db.session.execute(text("SELECT 1"))
-        except Exception as e2:
-            # If even the second attempt fails, surface a clean 503.
-            # You can customize this to jsonify a nicer payload if you prefer.
-            from flask import abort
-            abort(503, description="Database temporarily unavailable. Please retry.")
-
-# --- Create tables once with retry/backoff (Flask 3-safe) ---
-def _safe_create_all(max_tries=6):
-    # exponential backoff: 1, 2, 4, 8, 16, 30 seconds
-    delays = [1, 2, 4, 8, 16, 30]
-    for i in range(min(max_tries, len(delays))):
-        try:
-            with app.app_context():
-                db.create_all()
-            print("✅ DB init: create_all() succeeded")
-            return
-        except OperationalError as e:
-            print(f"⚠️ DB init failed (try {i+1}): {e}")
-            time.sleep(delays[i])
-    # Don't crash the process—app can connect lazily on first real request
-    print("⏭️ Skipping create_all() after retries; will connect per-request.")
-
-_safe_create_all()
-
-# Optional: log target (sanitized) to confirm sslmode=require made it in
-try:
-    print("DB target:", app.config["SQLALCHEMY_DATABASE_URI"].split("@")[-1])
-except Exception:
-    pass
 
 # ----- constants -----
 DEPT_DISPATCH = "MOD"
@@ -144,8 +56,11 @@ def next_from_deque(q: deque):
     q.rotate(-1)
     return x
 
-# Create tables once when the app gets its first request
-
+@app.before_request
+def create_tables_once():
+    if not hasattr(app, 'tables_created'):
+        db.create_all()
+        app.tables_created = True
 
 @app.route("/")
 def home():
