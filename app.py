@@ -4,6 +4,12 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 from flask import Flask, request, jsonify, render_template, send_file
 from models import db, Department, Employee, Schedule, Holiday
+# add after your other imports
+try:
+    from sqlalchemy.exc import OperationalError
+except Exception:
+    # fallback so the retry still works even if SQLAlchemy’s class isn’t available
+    OperationalError = Exception
 
 app = Flask(__name__)
 
