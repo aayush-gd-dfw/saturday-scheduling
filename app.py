@@ -31,6 +31,9 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 
 db.init_app(app)
 
+# Create tables once at import time (Flask 3-safe)
+with app.app_context():
+    db.create_all()
 
 # ----- constants -----
 DEPT_DISPATCH = "MOD"
@@ -75,16 +78,7 @@ def next_from_deque(q: deque):
     return x
 
 # Create tables once when the app gets its first request
-@app.before_first_request
-def _create_tables_once():
-    db.create_all()
 
-
-@app.before_request
-def create_tables_once():
-    if not hasattr(app, 'tables_created'):
-        db.create_all()
-        app.tables_created = True
 
 @app.route("/")
 def home():
