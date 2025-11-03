@@ -7,12 +7,30 @@ from models import db, Department, Employee, Schedule, Holiday
 
 app = Flask(__name__)
 
-# DB config (Render friendly)
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get(
-    "DATABASE_URL", "sqlite:///local.db"
-).replace("postgres://", "postgresql://")
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# --- DB config (Render-friendly, single-file patch) ---
+def _db_url():
+    import os
+    url = os.environ.get("DATABASE_URL", "sqlite:///local.db")
+    # SQLAlchemy needs 'postgresql://' (Render/Heroku often gives 'postgres://')
+    url = url.replace("postgres://", "postgresql://")
+    # Enforce TLS so psycopg2 doesn't get dropped mid-handshake
+    if url.startswith("postgresql://") and "sslmode=" not in url:
+        url += ("&" if "?" in url else "?") + "sslmode=require"
+    return url
+
+app.config["SQLALCHEMY_DATABASE_URI"] = _db_url()
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+# Keep connections fresh so idle ones (dropped by provider) are recycled
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,   # test connection before use; replace if dead
+    "pool_recycle": 300,     # recycle after 5 min (tune if your DB idles sooner)
+    "pool_size": 5,          # modest pool to avoid hitting connection limits
+    "max_overflow": 5,
+}
+
 db.init_app(app)
+
 
 # ----- constants -----
 DEPT_DISPATCH = "MOD"
@@ -55,6 +73,12 @@ def next_from_deque(q: deque):
     x = q[0]
     q.rotate(-1)
     return x
+
+# Create tables once when the app gets its first request
+@app.before_first_request
+def _create_tables_once():
+    db.create_all()
+
 
 @app.before_request
 def create_tables_once():
