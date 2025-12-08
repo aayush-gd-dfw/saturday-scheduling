@@ -46,7 +46,7 @@
       initialView: 'dayGridMonth',
       height: "auto",
       events: data.map(s => ({
-        title: `${s.department} — ${s.employee}`,
+        title: `${s.employee} -- ${s.department}`,
         start: s.date,
         color: s.override ? "orange" : "#0d6efd"
       })),
