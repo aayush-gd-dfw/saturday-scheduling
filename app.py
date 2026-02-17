@@ -27,6 +27,8 @@ DEPT_COLDEN = "COL/DEN"
 DEPT_SPEC_OPS = "Spec Ops"
 
 WEEKLY_ONE = {DEPT_DISPATCH, DEPT_CSR, DEPT_SPEC_OPS_OFFICE, DEPT_ARL, DEPT_SHOP}
+GROUPED_DEPTS = {DEPT_SPEC_OPS, DEPT_CAR, DEPT_DAL, DEPT_ARL, DEPT_COLDEN}
+ALLOWED_GROUPS = {1, 2, 3, 4,5}
 
 # ----- helpers -----
 def coming_saturday(from_day: date) -> date:
@@ -96,12 +98,13 @@ def add_employee():
     if not dept:
         return jsonify({"error": f"Department ID {dept_id} not found"}), 404
 
-    if dept.name == "Spec Ops":
-        group_num = int(group_num) if group_num else None
-        if group_num and group_num not in (1,2,3,4):
-            return jsonify({"error": "group_num must be 1..4 for Spec Ops"}), 400
+    if dept.name in GROUPED_DEPTS:
+        group_num = int(group_num) if group_num not in (None, "", "null") else None
+        if group_num is not None and group_num not in ALLOWED_GROUPS:
+            return jsonify({"error": "group_num must be 1..4"}), 400
     else:
         group_num = None
+
 
     emp = Employee(name=name, department_id=dept.id, group_num=group_num)
     db.session.add(emp)
@@ -129,18 +132,13 @@ def add_employee_by_name():
     dept = Department.query.filter(Department.name.ilike(dept_name)).first()
     if not dept:
         return jsonify({"error": f"Department '{dept_name}' not found"}), 404
-    GROUPED_DEPTS = {"spec ops", "car", "dal", "arl", "col/den"}
-    ALLOWED_GROUPS = {1, 2, 3, 4}
-    
-    dept_key = (dept.name or "").strip().lower()
-    
-    if dept_key in GROUPED_DEPTS:
-        group_num = body.get("group_num")
+    if dept.name in GROUPED_DEPTS:
         group_num = int(group_num) if group_num not in (None, "", "null") else None
         if group_num is not None and group_num not in ALLOWED_GROUPS:
             return jsonify({"error": "group_num must be 1..4"}), 400
     else:
         group_num = None
+
 
 
 
