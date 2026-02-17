@@ -130,7 +130,7 @@ def add_employee_by_name():
     if not dept:
         return jsonify({"error": f"Department '{dept_name}' not found"}), 404
     GROUPED_DEPTS = {DEPT_SPEC_OPS, DEPT_CAR, DEPT_DAL, DEPT_ARL, DEPT_COLDEN}
-    ALLOWED_GROUPS = {1, 2, 3, 4}   # adjust if you want different range
+    ALLOWED_GROUPS = {1, 2, 3, 4,5}   # adjust if you want different range
 
     if dept.name in GROUPED_DEPTS:
         group_num = int(group_num) if group_num not in (None, "", "null") else None
