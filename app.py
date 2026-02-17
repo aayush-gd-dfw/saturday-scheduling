@@ -129,15 +129,19 @@ def add_employee_by_name():
     dept = Department.query.filter(Department.name.ilike(dept_name)).first()
     if not dept:
         return jsonify({"error": f"Department '{dept_name}' not found"}), 404
-    GROUPED_DEPTS = {DEPT_SPEC_OPS, DEPT_CAR, DEPT_DAL, DEPT_ARL, DEPT_COLDEN}
-    ALLOWED_GROUPS = {1, 2, 3, 4,5}   # adjust if you want different range
-
-    if dept.name in GROUPED_DEPTS:
+    GROUPED_DEPTS = {"spec ops", "car", "dal", "arl", "col/den"}
+    ALLOWED_GROUPS = {1, 2, 3, 4}
+    
+    dept_key = (dept.name or "").strip().lower()
+    
+    if dept_key in GROUPED_DEPTS:
+        group_num = body.get("group_num")
         group_num = int(group_num) if group_num not in (None, "", "null") else None
         if group_num is not None and group_num not in ALLOWED_GROUPS:
-            return jsonify({"error": f"group_num must be one of {sorted(ALLOWED_GROUPS)}"}), 400
+            return jsonify({"error": "group_num must be 1..4"}), 400
     else:
         group_num = None
+
 
 
 
