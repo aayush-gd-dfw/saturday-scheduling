@@ -599,7 +599,7 @@ def delete_schedule():
 def export_excel():
     """
     Excel format:
-    - Columns: Department, Employee, then one column per Saturday date
+    - Columns: Department, Employee, Group #, then one column per Saturday date
     - Rows: employees
     - Cell = "x" if scheduled that date
     """
@@ -615,14 +615,21 @@ def export_excel():
     table = []
     for d in depts:
         for e in sorted(d.employees, key=lambda x: x.id):
-            row = {"Department": d.name, "Employee": e.name}
+            row = {
+                "Department": d.name,
+                "Employee": e.name,
+                "Group #": e.group_num if e.group_num is not None else ""
+            }
             for dt in dates:
                 row[dt.isoformat()] = "x" if dt in schedmap.get(e.id, set()) else ""
             table.append(row)
 
     # Export with pandas
     import pandas as pd
-    df = pd.DataFrame(table, columns=["Department", "Employee"] + [dt.isoformat() for dt in dates])
+    df = pd.DataFrame(
+        table,
+        columns=["Department", "Employee", "Group #"] + [dt.isoformat() for dt in dates]
+    )
 
     from io import BytesIO
     bio = BytesIO()
